@@ -1,0 +1,325 @@
+/* static/css/style.css */
+:root {
+    --primary-color: #4A90E2; /* A modern blue */
+    --secondary-color: #50E3C2; /* A vibrant accent */
+    --text-color: #333;
+    --light-text-color: #666;
+    --background-light: #F0F2F5; /* A soft, light background */
+    --background-medium: #E2E8F0; /* Slightly darker for contrast */
+    --card-background: #FFFFFF;
+    --border-color: #DDE1E6;
+    --shadow-light: rgba(0, 0, 0, 0.08);
+    --shadow-medium: rgba(0, 0, 0, 0.12);
+    --user-message-bg: #D9F7BE; /* Softer green for user messages */
+    --user-message-text: #376E0A;
+    --assistant-message-bg: #FEEFB3; /* Softer yellow for assistant messages */
+    --assistant-message-text: #8A6D3B;
+    --button-hover: #3A7BBF;
+    --link-color: #4A90E2;
+    --link-hover: #3A7BBF;
+}
+
+body {
+    font-family: 'Inter', sans-serif; /* Using a more modern font */
+    margin: 0;
+    padding: 25px; /* Slightly more padding */
+    background-color: var(--background-light);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    background-color: var(--card-background);
+    border-radius: 12px; /* More rounded corners */
+    box-shadow: 0 6px 20px var(--shadow-medium); /* More prominent shadow */
+    width: 100%;
+    max-width: 900px; /* Slightly wider container */
+    padding: 30px; /* More internal padding */
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-height: 650px; /* Adjusted min-height */
+    transition: transform 0.3s ease-in-out; /* Smooth transition on hover (if applicable later) */
+}
+
+.container:hover {
+    transform: translateY(-3px); /* Subtle lift on hover */
+}
+
+h1 {
+    text-align: center;
+    color: var(--primary-color); /* Primary color for headings */
+    margin-bottom: 25px;
+    font-size: 2.5em; /* Larger main heading */
+    font-weight: 700; /* Bolder */
+    letter-spacing: -0.5px;
+}
+
+.chat-window {
+    flex-grow: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    padding: 20px; /* More padding */
+    overflow-y: auto;
+    margin-bottom: 20px;
+    background-color: var(--background-medium); /* Slightly darker background for chat */
+    display: flex; /* Enable flex for messages */
+    flex-direction: column; /* Stack messages vertically */
+    gap: 10px; /* Space between messages */
+    box-shadow: inset 0 2px 5px var(--shadow-light); /* Subtle inner shadow */
+}
+
+.message {
+    padding: 10px 18px; /* More padding */
+    border-radius: 20px; /* More rounded, "pill-shaped" */
+    max-width: 75%; /* Slightly wider max-width */
+    word-wrap: break-word;
+    font-size: 0.95em;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Subtle shadow for messages */
+}
+
+.message.user {
+    background-color: var(--user-message-bg);
+    color: var(--user-message-text);
+    align-self: flex-end;
+    margin-left: auto;
+    border-bottom-right-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.message.assistant {
+    background-color: var(--assistant-message-bg);
+    color: var(--assistant-message-text);
+    align-self: flex-start;
+    margin-right: auto;
+    border-bottom-left-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.input-area {
+    display: flex;
+    gap: 15px; /* More space between input and button */
+    align-items: center; /* Vertically align items */
+}
+
+.input-area input[type="text"] {
+    flex-grow: 1;
+    padding: 12px 15px; /* More padding */
+    border: 1px solid var(--border-color);
+    border-radius: 8px; /* More rounded */
+    font-size: 17px; /* Slightly larger font */
+    outline: none; /* Remove default outline */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.input-area input[type="text"]:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2); /* Focus glow */
+}
+
+.input-area button {
+    padding: 12px 20px; /* More padding */
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 8px; /* More rounded */
+    cursor: pointer;
+    font-size: 17px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.input-area button:hover {
+    background-color: var(--button-hover);
+    transform: translateY(-2px); /* Subtle lift on hover */
+}
+
+.input-area button:active {
+    transform: translateY(0); /* Press effect */
+}
+
+/* Recommendations Summary */
+.recommendations-summary {
+    margin-top: 30px; /* More space above */
+    padding: 25px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background-color: var(--background-medium); /* Use background-medium for consistency */
+    box-shadow: 0 4px 15px var(--shadow-light); /* Softer shadow */
+}
+
+.recommendations-summary h2 {
+    text-align: center;
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-size: 2em;
+    font-weight: 600;
+}
+
+.card-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 25px; /* Increased gap between cards */
+    justify-content: center;
+    margin-bottom: 25px;
+}
+
+.card-item {
+    background-color: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    box-shadow: 0 4px 12px var(--shadow-light); /* Improved shadow for cards */
+    padding: 20px; /* More padding */
+    width: calc(33.33% - 25px); /* Adjusted for gap */
+    box-sizing: border-box;
+    text-align: center;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-item:hover {
+    transform: translateY(-5px); /* Lift effect on hover */
+    box-shadow: 0 8px 20px var(--shadow-medium); /* Enhanced shadow on hover */
+}
+
+.card-item img {
+    max-width: 120px; /* Slightly larger images */
+    height: auto;
+    margin-bottom: 15px;
+    border-radius: 8px; /* More rounded image corners */
+    object-fit: cover; /* Ensure image covers space without distortion */
+    border: 1px solid var(--border-color); /* Subtle border for images */
+}
+
+.card-item h3 {
+    margin-top: 0;
+    color: var(--primary-color);
+    font-size: 1.3em; /* Slightly larger */
+    margin-bottom: 8px;
+}
+
+.card-item p {
+    font-size: 0.9em;
+    color: var(--light-text-color);
+    margin-bottom: 8px; /* Consistent spacing */
+}
+
+.card-item .reasons {
+    font-style: italic;
+    color: var(--light-text-color);
+    margin-bottom: 12px;
+    font-size: 0.85em; /* Slightly smaller for emphasis on style */
+}
+
+.card-item .reward-sim {
+    font-weight: bold;
+    color: var(--secondary-color); /* Use secondary color for emphasis */
+    font-size: 1.1em; /* Larger and more prominent */
+    margin-bottom: 18px;
+}
+
+.card-item a {
+    display: inline-block;
+    padding: 10px 18px;
+    background-color: var(--secondary-color); /* Use secondary color for action button */
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    font-weight: 600;
+}
+
+.card-item a:hover {
+    background-color: #44C7B0; /* Slightly darker shade of secondary color */
+    transform: translateY(-2px);
+}
+
+.recommendations-summary button {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background-color: #6c757d; /* Keep grey for "show more" or similar */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 17px;
+    margin-top: 25px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.recommendations-summary button:hover {
+    background-color: #5a6268;
+    transform: translateY(-2px);
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    body {
+        padding: 15px;
+    }
+
+    .container {
+        padding: 20px;
+        min-height: auto;
+    }
+
+    h1 {
+        font-size: 2em;
+    }
+
+    .chat-window {
+        min-height: 300px;
+        padding: 15px;
+    }
+
+    .card-list {
+        gap: 15px;
+    }
+
+    .card-item {
+        width: calc(50% - 15px); /* 2 cards per row on smaller screens */
+        padding: 15px;
+    }
+
+    .recommendations-summary h2 {
+        font-size: 1.8em;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 10px;
+    }
+
+    .container {
+        padding: 15px;
+    }
+
+    h1 {
+        font-size: 1.8em;
+    }
+
+    .input-area {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .input-area button {
+        width: 100%;
+    }
+
+    .message {
+        max-width: 90%;
+        padding: 8px 15px;
+    }
+
+    .card-item {
+        width: 100%; /* 1 card per row on very small screens */
+        padding: 15px;
+    }
+}

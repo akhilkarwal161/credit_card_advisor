@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Credit Card Advisor</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Credit Card Advisor</h1>
+      <div class="chat-window" id="chat-window">
+        <div class="message assistant">
+          Hi there! I'm your credit card advisor. Let's find the best card for
+          you. What's your approximate monthly income in INR?
+        </div>
+      </div>
+      <div class="input-area">
+        <input
+          type="text"
+          id="user-input"
+          placeholder="Type your answer here..."
+          onkeypress="handleKeyPress(event)"
+        />
+        <button onclick="sendMessage()">Send</button>
+      </div>
+
+      <div
+        class="recommendations-summary"
+        id="recommendations-summary"
+        style="display: none"
+      >
+        <h2>Your Recommended Cards</h2>
+        <div id="card-list" class="card-list"></div>
+        <button onclick="restartFlow()">Restart Advisor</button>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  </body>
+</html>
