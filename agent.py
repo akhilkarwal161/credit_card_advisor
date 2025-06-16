@@ -6,7 +6,8 @@ from langchain_core.tools import Tool
 from langchain_core.prompts import PromptTemplate
 from langchain.agents import AgentExecutor, create_react_agent
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ValidationError  # Import ValidationError
+# Keep for internal type checking if needed later
+from pydantic import BaseModel, Field, ValidationError
 
 # Import database functions and recommender logic
 from database import get_cards_by_criteria
@@ -28,11 +29,9 @@ _temp_user_data_storage = {
     'credit_score': None
 }
 
-# --- Pydantic Models for Tool Inputs ---
-
-
+# --- Pydantic Models for Internal Type Checking (not directly for tool input schema) ---
 class UserUpdateInput(BaseModel):
-    """Input for updating user data."""
+    """Internal model for validating updated user data fields."""
     monthly_income: Optional[float] = Field(
         None, description="The user's monthly income in INR.")
     spending_habits: Optional[Dict[str, float]] = Field(
@@ -44,47 +43,80 @@ class UserUpdateInput(BaseModel):
     credit_score: Optional[int] = Field(
         None, description="The user's approximate credit score (numerical value) or None if unknown.")
 
+
 # --- Tool Functions ---
 
-
-def get_credit_cards_tool(
-    user_income: float,
-    user_credit_score: int,
-    preferred_benefits: str = "",
-) -> str:
+def get_credit_cards_tool(data_json_string: str) -> str:
     """
     Fetches and processes credit card recommendations based on user's monthly income, credit score,
-    and preferred benefits. It will use the _temp_user_data_storage for full user context.
+    and preferred benefits. It expects a pure JSON string and extracts parameters after parsing.
     Returns a JSON string of a list of recommended cards, each with name, key reasons, and reward simulation.
     """
     print(
-        f"get_credit_cards_tool: Received user_income={user_income}, user_credit_score={user_credit_score}, preferred_benefits={preferred_benefits}")
+        f"get_credit_cards_tool: Received raw string input: '{data_json_string}'")
 
     global _temp_user_data_storage  # Access the global storage for full context
 
-    benefits_list = [b.strip().lower() for b in preferred_benefits.split(',')
-                     ] if preferred_benefits else []
+    try:
+        # Aggressively strip any surrounding characters including markdown backticks and whitespace
+        cleaned_json_string = data_json_string.strip().strip('`').strip()
 
-    if 'any' in benefits_list:  # Handle "any" as a special case for benefits
-        raw_cards = get_cards_by_criteria(user_income, user_credit_score, [])
-    else:
-        raw_cards = get_cards_by_criteria(
-            user_income, user_credit_score, benefits_list)
+        if not cleaned_json_string:
+            raise ValueError("Input string is empty after cleaning.")
 
-    # Use the recommender to get the final, ranked recommendations
-    # Pass the global _temp_user_data_storage for comprehensive recommendation logic
-    final_recommendations = get_card_recommendations(
-        raw_cards, _temp_user_data_storage)
+        parsed_input_dict = json.loads(cleaned_json_string)
+        print(
+            f"get_credit_cards_tool: Parsed JSON string: {parsed_input_dict}")
 
-    # Return the recommendations as a JSON string
-    return json.dumps(final_recommendations)
+        user_income = parsed_input_dict.get('user_income')
+        user_credit_score = parsed_input_dict.get('user_credit_score')
+        preferred_benefits_str = parsed_input_dict.get(
+            'preferred_benefits', "")
+
+        # Basic type checking and error handling for extracted values
+        if not isinstance(user_income, (int, float)):
+            raise ValueError(
+                f"Invalid type for user_income: {type(user_income)}")
+        if not isinstance(user_credit_score, int):
+            raise ValueError(
+                f"Invalid type for user_credit_score: {type(user_credit_score)}")
+        if not isinstance(preferred_benefits_str, str):
+            raise ValueError(
+                f"Invalid type for preferred_benefits: {type(preferred_benefits_str)}")
+
+        benefits_list = [b.strip().lower() for b in preferred_benefits_str.split(',')
+                         ] if preferred_benefits_str else []
+
+        if 'any' in benefits_list:  # Handle "any" as a special case for benefits
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, [])
+        else:
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, benefits_list)
+
+        # Use the recommender to get the final, ranked recommendations
+        final_recommendations = get_card_recommendations(
+            raw_cards, _temp_user_data_storage)
+
+        # Return the recommendations as a JSON string
+        return json.dumps(final_recommendations)
+
+    except json.JSONDecodeError as e:
+        print(f"get_credit_cards_tool: JSONDecodeError: {e}")
+        return f"Error: Invalid JSON format for get_credit_cards_tool. Please ensure your Action Input is a pure JSON object string: {e}"
+    except ValueError as e:
+        print(f"get_credit_cards_tool: ValueError: {e}")
+        return f"Error: Missing or invalid data types for get_credit_cards_tool: {e}"
+    except Exception as e:
+        print(f"get_credit_cards_tool: General Error: {e}")
+        return f"Error fetching credit card recommendations: {e}"
 
 
 # Expects a single string argument
 def update_user_data_tool_func(data_json_string: str) -> str:
     """
     Updates the global user data dictionary with provided information.
-    It expects a pure JSON string and validates with Pydantic after parsing.
+    It expects a pure JSON string and updates the storage after parsing.
     """
     global _temp_user_data_storage
 
@@ -103,22 +135,50 @@ def update_user_data_tool_func(data_json_string: str) -> str:
         print(
             f"update_user_data_tool_func: Parsed JSON string: {parsed_input_dict}")
 
-        # Validate the parsed input using the Pydantic model
-        user_input = UserUpdateInput(**parsed_input_dict)
-        print(
-            f"update_user_data_tool_func: Validated Pydantic object: {user_input.dict()}")
+        # Manually update _temp_user_data_storage with type checking, no explicit conversions unless necessary
+        if 'monthly_income' in parsed_input_dict and isinstance(parsed_input_dict['monthly_income'], (int, float)):
+            _temp_user_data_storage['monthly_income'] = parsed_input_dict['monthly_income']
+        elif 'monthly_income' in parsed_input_dict and parsed_input_dict['monthly_income'] is not None:
+            # If it's a string, try converting to float, otherwise warn
+            try:
+                _temp_user_data_storage['monthly_income'] = float(
+                    parsed_input_dict['monthly_income'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert monthly_income to float: {parsed_input_dict['monthly_income']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['monthly_income'] = None
 
-        # Direct assignment after validation by Pydantic
-        if user_input.monthly_income is not None:
-            _temp_user_data_storage['monthly_income'] = user_input.monthly_income
-        if user_input.spending_habits is not None:
-            _temp_user_data_storage['spending_habits'] = user_input.spending_habits
-        if user_input.preferred_benefits is not None:
-            _temp_user_data_storage['preferred_benefits'] = user_input.preferred_benefits
-        if user_input.existing_cards is not None:
-            _temp_user_data_storage['existing_cards'] = user_input.existing_cards
-        if user_input.credit_score is not None:
-            _temp_user_data_storage['credit_score'] = user_input.credit_score
+        if 'spending_habits' in parsed_input_dict and isinstance(parsed_input_dict['spending_habits'], dict):
+            _temp_user_data_storage['spending_habits'] = parsed_input_dict['spending_habits']
+        elif 'spending_habits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for spending_habits: {parsed_input_dict['spending_habits']}")
+
+        if 'preferred_benefits' in parsed_input_dict and isinstance(parsed_input_dict['preferred_benefits'], list):
+            _temp_user_data_storage['preferred_benefits'] = parsed_input_dict['preferred_benefits']
+        elif 'preferred_benefits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for preferred_benefits: {parsed_input_dict['preferred_benefits']}")
+
+        if 'existing_cards' in parsed_input_dict and isinstance(parsed_input_dict['existing_cards'], list):
+            _temp_user_data_storage['existing_cards'] = parsed_input_dict['existing_cards']
+        elif 'existing_cards' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for existing_cards: {parsed_input_dict['existing_cards']}")
+
+        if 'credit_score' in parsed_input_dict and isinstance(parsed_input_dict['credit_score'], int):
+            _temp_user_data_storage['credit_score'] = parsed_input_dict['credit_score']
+        elif 'credit_score' in parsed_input_dict and parsed_input_dict['credit_score'] is not None:
+            # If it's a float, try converting to int, otherwise warn
+            try:
+                _temp_user_data_storage['credit_score'] = int(
+                    parsed_input_dict['credit_score'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert credit_score to int: {parsed_input_dict['credit_score']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['credit_score'] = None
 
         print(
             f"update_user_data_tool_func: Current _temp_user_data_storage after merge: {_temp_user_data_storage}")
@@ -126,10 +186,6 @@ def update_user_data_tool_func(data_json_string: str) -> str:
     except json.JSONDecodeError as e:
         print(f"update_user_data_tool_func: JSONDecodeError: {e}")
         return f"Error: Invalid JSON format for data update. Please ensure your Action Input is a pure JSON object string: {e}"
-    except ValidationError as e:
-        print(
-            f"update_user_data_tool_func: Pydantic Validation Error: {e.errors()}")
-        return f"Error updating user data: Invalid data format according to schema: {e.errors()}"
     except Exception as e:
         print(f"update_user_data_tool_func: General Error during update: {e}")
         return f"Error updating user data: {e}"
@@ -140,13 +196,13 @@ tools = [
     Tool(
         name="get_credit_cards_tool",
         func=get_credit_cards_tool,
-        description="Useful for fetching and processing credit card recommendations. Requires 'user_income' (float), 'user_credit_score' (int), and 'preferred_benefits' (optional, comma-separated string)."
+        # Removed args_schema for get_credit_cards_tool to manually parse input
+        description="Useful for fetching and processing credit card recommendations. The Action Input MUST be a pure JSON string (e.g., '{\"user_income\": 50000.0, \"user_credit_score\": 750, \"preferred_benefits\": \"cashback\"}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'user_income' (float), 'user_credit_score' (int), and 'preferred_benefits' (optional, comma-separated string)."
     ),
     Tool(
         name="update_user_data_tool",
         func=update_user_data_tool_func,
-        # IMPORTANT: No args_schema here, as the function expects a single raw string.
-        # The internal function handles JSON parsing and Pydantic validation.
+        # args_schema is removed here, as the function now expects a single raw string
         description="Call this tool to update the user's collected data. The Action Input MUST be a pure JSON string (e.g., '{\"monthly_income\": 50000.0}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'monthly_income' (float), 'spending_habits' (dict), 'preferred_benefits' (list of strings), 'existing_cards' (list of strings), or 'credit_score' (int)."
     ),
 ]
@@ -166,11 +222,11 @@ Here's the information you need to collect in order, strictly one by one:
 **CRITICAL STEPS:**
 * **A. Information Gathering:** You must go through the above list, asking for one piece of information at a time. Do NOT ask for multiple pieces of information in one turn.
 * **B. Data Storage:** AFTER you receive and understand EACH piece of information from the user, you MUST immediately use the `update_user_data_tool` to store it. The input to `update_user_data_tool` MUST be a pure JSON object string, without any surrounding markdown (like triple backticks) or extra text.
-    * Example for income: `Action Input: {"monthly_income": 50000.0}`
-    * Example for spending: `Action Input: {"spending_habits": {"fuel": 2000.0, "groceries": 5000.0}}`
-    * Example for benefits: `Action Input: {"preferred_benefits": ["cashback", "lounge access"]}`
-    * Example for existing cards: `Action Input: {"existing_cards": ["Card A", "Card B"]}` or `Action Input: {"existing_cards": []}`
-    * Example for credit score: `Action Input: {"credit_score": 750}` or `Action Input: {"credit_score": None}`
+    * Example for income: `Action Input: {{"monthly_income": 50000.0}}`
+    * Example for spending: `Action Input: {{"spending_habits": {{"fuel": 2000.0, "groceries": 5000.0}}}}`
+    * Example for benefits: `Action Input: {{"preferred_benefits": ["cashback", "lounge access"]}}`
+    * Example for existing cards: `Action Input: {{"existing_cards": []}}`
+    * Example for credit score: `Action Input: {{"credit_score": 750}}`
 * **C. Conversational Output:** When you need to ask a follow-up question or provide a direct response *before* making final recommendations, you must put your response in the `Final Answer` block. Do not just output text without a `Thought:` and `Final Answer:`.
 * **D. Data Awareness:** The `current_user_data` variable is provided in the prompt. You must use this string to understand the current state of collected information and decide what to ask next or when to make recommendations. Parse this string as a JSON object in your Thought process to inspect the fields.
 
@@ -193,7 +249,7 @@ To use a tool, please use the following format:
 ```
 Thought: You should always think about what to do next to gather information or process it.
 Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action (MUST be a pure JSON string, with no surrounding markdown or extra text. Example: {"monthly_income": 50000.0} or {} for tools with no input)
+Action Input: the input to the action (MUST be a pure JSON string, with no surrounding markdown or extra text. Example: {{"monthly_income": 50000.0}} or {{}} for tools with no input)
 Observation: the result of the action
 ```
 
@@ -205,7 +261,7 @@ Action: get_credit_cards_tool
 Action Input: {{"user_income": <EXTRACT_INCOME_FROM_CURRENT_USER_DATA>, "user_credit_score": <EXTRACT_CREDIT_SCORE_FROM_CURRENT_USER_DATA>, "preferred_benefits": "<EXTRACT_COMMA_SEPARATED_BENEFITS_FROM_CURRENT_USER_DATA>"}}
 Observation: [string representation of final processed recommendations]
 Thought: I have received the credit card recommendations. Now I will present them to the user.
-Final Answer: [Your final answer, which includes the recommended cards with their name, key reasons, and reward simulation, clearly presented.]
+Final Answer: Here are some credit card recommendations based on your preferences: [YOUR JSON ARRAY OF CARD RECOMMENDATIONS HERE]
 ```
 
 When you need to ask a follow-up question, use this format:
@@ -252,3 +308,4 @@ def clear_temp_user_data_storage():
         'existing_cards': [],
         'credit_score': None
     }
+    return _temp_user_data_storage

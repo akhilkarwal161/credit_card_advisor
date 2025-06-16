@@ -1,19 +1,16 @@
 # app.py
 from flask import Flask, render_template, request, jsonify
 import json
-import ast  # Still potentially useful if agent output is a string representation of a list/dict
+import re  # Import the regex module
 
 # Import only what's necessary from agent.py: the agent executor object and the clear function
 from agent import get_agent_executor, clear_temp_user_data_storage, get_temp_user_data_storage
-
-# Import database functions
 from database import init_db, populate_initial_data, clear_duplicate_cards
 
 app = Flask(__name__)
 
 # Initialize the LangChain agent executor once when the app starts
 agent_executor = get_agent_executor()
-
 
 # --- Session Management for Chat History ---
 user_sessions = {}  # This will manage chat history per session.
@@ -59,8 +56,7 @@ def chat():
     # Retrieve the current state of user data to pass to the agent (for agent's internal awareness)
     current_user_data = get_temp_user_data_storage()
 
-    # Prepare input for the agent - current_user_data is NOT passed from here anymore.
-    # The agent uses its internal tool (get_user_data_for_agent) for data awareness.
+    # Prepare input for the agent
     agent_input = {
         "input": user_message,
         "chat_history": chat_history,
@@ -71,49 +67,49 @@ def chat():
     try:
         # Invoke the LangChain agent to get a response
         agent_response = agent_executor.invoke(agent_input)
-        response_text = agent_response.get(
+        raw_agent_output = agent_response.get(
             'output', "I'm sorry, I couldn't process that.")
 
-        # Update chat history with the user's message and agent's response
-        chat_history.append({"role": "user", "content": user_message})
-        chat_history.append({"role": "assistant", "content": response_text})
+        # Default conversational response if no structured recommendations are found/extracted
+        response_text = raw_agent_output
 
         # --- Extract structured recommendations from agent's response if available ---
-        # The agent's final answer should contain a structured JSON string of recommendations.
-        try:
-            # Look for a JSON array block in the agent's response (e.g., starting with '[')
-            json_start = response_text.find('[')
-            json_end = response_text.rfind(']')
+        # Use regex to find a JSON array pattern (starting with '[' and ending with ']')
+        json_match = re.search(r'\[.*\]', raw_agent_output, re.DOTALL)
 
-            if json_start != -1 and json_end != -1 and json_end > json_start:
-                json_str = response_text[json_start: json_end + 1]
-                # Attempt to parse it as a list of recommendations
+        if json_match:
+            json_str = json_match.group(0)  # Get the matched JSON string
+            try:
                 parsed_recommendations = json.loads(json_str)
                 if isinstance(parsed_recommendations, list):
                     recommendations = parsed_recommendations
-                    # Clean up response_text to remove the raw JSON, if it was appended by the agent
-                    response_text_without_json = response_text.replace(
-                        json_str, "").strip()
-                    if response_text_without_json:
-                        response_text = response_text_without_json
-                    elif not response_text_without_json and "here are some credit card recommendations" not in response_text.lower():
-                        # Fallback intro
-                        response_text = "Here are some credit card recommendations based on your preferences:"
 
-            elif "here are some credit card recommendations based on your preferences:" in response_text.lower():
-                # If there's a general intro but no parseable JSON array,
-                # we assume the recommendations will be listed in natural language by the agent.
-                pass
+                    # Set a generic conversational intro for the chat window
+                    response_text = "Here are some credit card recommendations based on your preferences:"
 
-        except json.JSONDecodeError:
-            print("Warning: Agent's response did not contain valid JSON recommendations.")
-        except Exception as parse_e:
-            print(f"Warning: Error parsing agent's recommendations: {parse_e}")
+                    # Optionally, you could also remove the JSON part from raw_agent_output
+                    # if you wanted to display any non-JSON text the agent provided.
+                    # For now, we prioritize the clean intro + structured recommendations.
+
+            except json.JSONDecodeError:
+                print(
+                    f"Warning: Regex found potential JSON, but JSONDecodeError occurred: {json_str[:100]}...")
+                # If parsing fails, the original raw_agent_output remains in response_text
+            except Exception as parse_e:
+                print(
+                    f"Warning: General error parsing potential JSON from agent's recommendations: {parse_e}")
+                # If any other parsing error occurs, keep the original response_text
 
     except Exception as e:
         print(f"Error invoking agent: {e}")
         response_text = "I apologize, I encountered an internal error. Could you please rephrase or try again?"
-        chat_history.append({"role": "assistant", "content": response_text})
+        # Clear recommendations on agent invocation error
+        recommendations = []
+
+    # Update chat history with the user's message and agent's response
+    # The 'response_text' here should only be the conversational part
+    chat_history.append({"role": "user", "content": user_message})
+    chat_history.append({"role": "assistant", "content": response_text})
 
     return jsonify({"response": response_text, "recommendations": recommendations})
 

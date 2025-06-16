@@ -1,44 +1,129 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Credit Card Advisor</title>
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/style.css') }}"
-    />
-  </head>
-  <body>
-    <div class="container">
-      <h1>Credit Card Advisor</h1>
-      <div class="chat-window" id="chat-window">
-        <div class="message assistant">
-          Hi there! I'm your credit card advisor. Let's find the best card for
-          you. What's your approximate monthly income in INR?
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="font-inter bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl flex flex-col h-[85vh] overflow-hidden">
+        <h1 class="text-3xl font-bold text-blue-600 text-center py-6 border-b border-gray-200">Credit Card Advisor</h1>
+        
+        <div class="flex-grow p-5 overflow-y-auto flex flex-col space-y-4 bg-gray-50 border-b border-gray-200">
+            <!-- Chat messages will be appended here -->
+            <div class="max-w-[80%] p-3 rounded-xl bg-yellow-100 text-yellow-800 self-start mr-auto rounded-bl-sm">
+                Hello! I'm your credit card advisor. What's your monthly income in INR?
+            </div>
         </div>
-      </div>
-      <div class="input-area">
-        <input
-          type="text"
-          id="user-input"
-          placeholder="Type your answer here..."
-          onkeypress="handleKeyPress(event)"
-        />
-        <button onclick="sendMessage()">Send</button>
-      </div>
 
-      <div
-        class="recommendations-summary"
-        id="recommendations-summary"
-        style="display: none"
-      >
-        <h2>Your Recommended Cards</h2>
-        <div id="card-list" class="card-list"></div>
-        <button onclick="restartFlow()">Restart Advisor</button>
-      </div>
+        <div id="recommendations-summary" class="hidden p-5 bg-blue-50 border-t border-gray-200 overflow-y-auto">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4 text-center">Recommended Credit Cards</h2>
+            <div id="card-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 justify-items-center">
+                <!-- Recommended cards will be dynamically inserted here -->
+            </div>
+        </div>
+
+        <div class="flex p-5 space-x-3 border-t border-gray-200">
+            <input type="text" id="user-input" placeholder="Type your message..." class="flex-grow p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="send-button" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-full shadow-md hover:bg-blue-700 transition-colors duration-200 ease-in-out">Send</button>
+        </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-  </body>
+    <script>
+        const chatHistoryDiv = document.querySelector('.flex-grow.p-5'); // Select the div where messages are added
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const recommendationsSummary = document.getElementById('recommendations-summary');
+        const cardList = document.getElementById('card-list');
+
+        const sessionId = 'user_' + Math.random().toString(36).substr(2, 9); 
+
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        function addMessage(sender, message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('max-w-[80%]', 'p-3', 'rounded-xl', 'mb-2'); // Base styling
+
+            if (sender === 'user') {
+                messageDiv.classList.add('bg-blue-100', 'text-blue-800', 'self-end', 'ml-auto', 'rounded-br-sm'); // User message styles
+            } else {
+                messageDiv.classList.add('bg-yellow-100', 'text-yellow-800', 'self-start', 'mr-auto', 'rounded-bl-sm'); // Bot message styles
+            }
+            
+            messageDiv.textContent = message;
+            chatHistoryDiv.appendChild(messageDiv);
+            chatHistoryDiv.scrollTop = chatHistoryDiv.scrollHeight; // Auto-scroll to latest
+        }
+
+        function displayRecommendations(cards) {
+            cardList.innerHTML = ''; // Clear previous recommendations
+            if (cards && cards.length > 0) {
+                recommendationsSummary.classList.remove('hidden'); // Show summary container
+                cards.forEach(card => {
+                    const cardItem = document.createElement('div');
+                    cardItem.classList.add('bg-white', 'rounded-lg', 'shadow-md', 'p-4', 'flex', 'flex-col', 'space-y-3', 'border', 'border-gray-200', 'transition-transform', 'duration-200', 'ease-in-out', 'hover:scale-105');
+                    
+                    cardItem.innerHTML = `
+                        <img src="${card.image_url}" 
+                             alt="${card.card_name}" 
+                             class="max-w-[150px] h-auto mx-auto rounded-md border border-gray-200 p-2 object-contain">
+                        <h3 class="text-lg font-semibold text-gray-800 text-center">${card.card_name}</h3>
+                        <p class="text-sm text-gray-600 text-center"><strong>Key Reasons:</strong> ${card.key_reasons}</p>
+                        <p class="text-base font-bold text-green-600 text-center">${card.reward_simulation}</p>
+                        <a href="${card.affiliate_link || '#'}" target="_blank" class="mt-auto block text-center bg-green-500 text-white py-2 px-4 rounded-full hover:bg-green-600 transition-colors duration-200">Learn More & Apply</a>
+                    `;
+                    cardList.appendChild(cardItem);
+                });
+                recommendationsSummary.scrollTop = 0; // Scroll recommendations to top
+            } else {
+                recommendationsSummary.classList.add('hidden'); // Hide if no recommendations
+            }
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (message === '') return;
+
+            addMessage('user', message);
+            userInput.value = ''; // Clear input immediately
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message, session_id: sessionId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage('bot', data.response); // Display conversational part of the response
+
+                // Check and display recommendations if available
+                if (data.recommendations && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                    displayRecommendations(data.recommendations);
+                } else {
+                    displayRecommendations([]); // Clear old recommendations if none in this response
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                addMessage('bot', 'Oops! Something went wrong. Please try again.');
+                displayRecommendations([]); // Clear any old recommendations on error
+            }
+        }
+    </script>
+</body>
 </html>
