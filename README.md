@@ -16,9 +16,7 @@ Extensible Backend: Built on Flask and LangChain, allowing for easy expansion of
 Demo
 Experience the live Credit Card Advisor here: https://credit-card-advisor-xvhbgr5zoq-ul.a.run.app
 
-(Once you have your demo video/GIF, you can embed it here. For example:)
-
-(Replace <YOUR_VIDEO_ID_HERE> with your actual YouTube video ID, or if you have a GIF, use: ![Demo GIF](path/to/your/demo.gif))
+ <https://www.youtube.com/watch?v=pu-LUZE8nW8>
 
 Setup Instructions
 Follow these steps to get the Credit Card Advisor up and running on your local machine.
