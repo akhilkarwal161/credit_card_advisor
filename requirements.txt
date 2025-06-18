@@ -1,0 +1,6 @@
+Flask
+langchain
+langchain-google-genai
+pydantic
+python-dotenv
+twilio

@@ -2,6 +2,7 @@
 from flask import Flask, render_template, request, jsonify
 import json
 import re  # Import the regex module
+import os  # Import os to access environment variables
 
 # Import only what's necessary from agent.py: the agent executor object and the clear function
 from agent import get_agent_executor, clear_temp_user_data_storage, get_temp_user_data_storage
@@ -91,9 +92,9 @@ def chat():
                     # if you wanted to display any non-JSON text the agent provided.
                     # For now, we prioritize the clean intro + structured recommendations.
 
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 print(
-                    f"Warning: Regex found potential JSON, but JSONDecodeError occurred: {json_str[:100]}...")
+                    f"Warning: Regex found potential JSON, but JSONDecodeError occurred: {json_str[:100]}... Error: {e}")
                 # If parsing fails, the original raw_agent_output remains in response_text
             except Exception as parse_e:
                 print(
@@ -124,5 +125,7 @@ if __name__ == '__main__':
     # Populate the database with initial dummy data
     populate_initial_data()
 
-    # Run the Flask application in debug mode for development.
-    app.run(debug=True)
+    # Get the port from environment variable, default to 8080 if not set (Cloud Run will set this)
+    port = int(os.environ.get('PORT', 8080))
+    # Listen on all interfaces and dynamic port
+    app.run(host='0.0.0.0', port=port, debug=True)
