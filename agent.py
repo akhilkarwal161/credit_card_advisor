@@ -46,6 +46,7 @@ class UserUpdateInput(BaseModel):
 
 # --- Tool Functions ---
 
+
 def get_credit_cards_tool(data_json_string: str) -> str:
     """
     Fetches and processes credit card recommendations based on user's monthly income, credit score,
@@ -128,7 +129,6 @@ def update_user_data_tool_func(data_json_string: str) -> str:
         # Aggressively strip any surrounding characters including markdown backticks and whitespace
         cleaned_json_string = data_json_string.strip().strip('`').strip()
 
-        # Ensure it's not empty after cleaning
         if not cleaned_json_string:
             raise ValueError("Input string is empty after cleaning.")
 
@@ -208,7 +208,7 @@ tools = [
     ),
 ]
 
-# Prompt template string
+# Prompt template string - DEFINED HERE (moved for correct order)
 _prompt_template_string = """
 You are a helpful and friendly credit card advisor. Your goal is to recommend the best-fit credit cards to users through a clear, interactive, and empathetic conversation.
 
@@ -294,3 +294,36 @@ User Input: {input}
 Chat History: {chat_history}
 {agent_scratchpad}
 """
+
+prompt = PromptTemplate.from_template(_prompt_template_string)
+
+# Create the LangChain agent using the ReAct (Reasoning and Acting) framework.
+agent = create_react_agent(llm, tools, prompt)
+
+# Create an AgentExecutor to run the agent.
+agent_executor = AgentExecutor(
+    agent=agent, tools=tools, verbose=True, handle_parsing_errors=True
+)
+
+
+def get_agent_executor():
+    """Returns the initialized agent executor."""
+    return agent_executor
+
+
+def get_temp_user_data_storage():
+    """Returns the temporary user data storage dictionary."""
+    return _temp_user_data_storage
+
+
+def clear_temp_user_data_storage():
+    """Clears the temporary user data storage."""
+    global _temp_user_data_storage
+    _temp_user_data_storage = {
+        'monthly_income': None,
+        'spending_habits': {},
+        'preferred_benefits': [],
+        'existing_cards': [],
+        'credit_score': None
+    }
+    return _temp_user_data_storage
