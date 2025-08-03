@@ -53,14 +53,25 @@ python -c "from database import init_db, populate_initial_data; init_db(); popul
 
 (Note: This command clears and repopulates the database. If you have custom data, adjust accordingly.)
 
-Set up Google Gemini API Key:
-The LangChain agent uses the Google Gemini API.
-You need to set your Google API Key as an environment variable.
+### Set up Google Gemini API Key
+The LangChain agent uses the Google Gemini API. To protect your key, you should not hard-code it. Instead, use an environment file.
 
-export GOOGLE_API_KEY="YOUR_GEMINI_API_KEY" # On macOS/Linux
-# For Windows: set GOOGLE_API_KEY="YOUR_GEMINI_API_KEY"
+1.  **Create a `.env` file:** In the root directory of the project, create a new file named `.env` by copying the example file.
+    ```bash
+    cp .env.example .env
+    ```
 
-(Replace YOUR_GEMINI_API_KEY with your actual API key obtained from Google Cloud Console or AI Studio. Ensure this environment variable is active in the terminal where you run app.py.)
+2.  **Add your API key:** Open the new `.env` file and replace `YOUR_GOOGLE_API_KEY_HERE` with your actual API key obtained from Google.
+
+    ```
+    # .env
+    GOOGLE_API_KEY="your_actual_api_key_from_google"
+    ```
+
+The `.gitignore` file is already configured to ignore `.env`, so you won't accidentally commit your secret key.
+
+### Deployment Note
+When deploying to a service like Google Cloud Run, do not upload your `.env` file. Instead, configure the `GOOGLE_API_KEY` as a secret or environment variable directly in the cloud service's configuration settings. The application is set up to read this variable automatically.
 
 Running the Application
 Start the Flask Backend:
@@ -74,7 +85,7 @@ Open your web browser and navigate to the address provided by Flask (e.g., http:
 
 You can now interact with the Credit Card Advisor!
 
-Technologies Used
+## Technologies Used
 Backend: Flask (Python web framework)
 
 AI Agent: LangChain (for building LLM applications)

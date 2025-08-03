@@ -1,22 +1,27 @@
 # agent.py
 import os
 import json
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+from dotenv import load_dotenv
 from langchain_core.tools import Tool
 from langchain_core.prompts import PromptTemplate
 from langchain.agents import AgentExecutor, create_react_agent
 from typing import Optional, List, Dict, Any
 # Keep for internal type checking if needed later
 from pydantic import BaseModel, Field, ValidationError
-
 # Import database functions and recommender logic
 from database import get_cards_by_criteria
 from recommender import get_card_recommendations  # Import recommender function
 
-# IMPORTANT: No need to explicitly set GOOGLE_API_KEY for Canvas environments.
-# However, if running locally, you would typically set it as an environment variable or directly:
-# Your API Key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyDQkuKR0W6XyhOmUKcfNYnb-6KOv8yj0Ew"
+# Load environment variables from a .env file if it exists.
+load_dotenv()
+
+# IMPORTANT: Your API key should be set as an environment variable named GOOGLE_API_KEY.
+# You can do this by creating a .env file in the root of your project.
+# DO NOT commit your API key to version control.
+if not os.getenv("GOOGLE_API_KEY"):
+    raise ValueError(
+        "GOOGLE_API_KEY environment variable not set. Please create a .env file or set it manually.")
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
 
