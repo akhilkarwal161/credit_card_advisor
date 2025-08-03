@@ -9,6 +9,7 @@ venv/
 
 # VS Code
 .vscode/
+.qodo/
 
 # Database files (if using SQLite directly in project)
 *.db
