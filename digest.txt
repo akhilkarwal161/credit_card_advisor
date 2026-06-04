@@ -6,6 +6,7 @@ Directory structure:
     ├── app.py
     ├── database.py
     ├── Dockerfile
+    ├── prompt.md
     ├── recommender.py
     ├── requirements.txt
     ├── static/
@@ -1063,6 +1064,3601 @@ EXPOSE $PORT
 # Use gunicorn or similar for production, for simplicity, using Flask's built-in server
 CMD ["python", "app.py"]
 
+
+
+================================================
+FILE: prompt.md
+================================================
+Project Path: credit_card_advisor
+
+Source Tree:
+
+```txt
+credit_card_advisor
+â”œâ”€â”€ Agent_Design.md
+â”œâ”€â”€ Dockerfile
+â”œâ”€â”€ README.md
+â”œâ”€â”€ agent.py
+â”œâ”€â”€ app.py
+â”œâ”€â”€ database.py
+â”œâ”€â”€ digest.txt
+â”œâ”€â”€ prompt.md
+â”œâ”€â”€ recommender.py
+â”œâ”€â”€ requirements.txt
+â”œâ”€â”€ static
+â”‚   â”œâ”€â”€ css
+â”‚   â”‚   â””â”€â”€ style.css
+â”‚   â””â”€â”€ js
+â”‚       â””â”€â”€ main.js
+â””â”€â”€ templates
+    â””â”€â”€ index.html
+
+```
+
+`Agent_Design.md`:
+
+```md
+Agent Flow and Prompt Design Documentation
+This document provides detailed insights into the design and functionality of the LangChain agent powering the Credit Card Advisor application.
+
+1. Overall Architecture
+The Credit Card Advisor leverages a Flask backend to serve a web interface and interact with a LangChain agent. This agent acts as the brain of the application, orchestrating calls to various tools to gather information and provide personalized credit card recommendations.
+
+Data Flow Diagram (Conceptual):
+
+User Input (Browser)
+       |
+       v
+Flask Backend (app.py)
+       | (POST /chat)
+       v
+LangChain AgentExecutor (agent.py)
+       |
+       v
+   [ Tools ]
+   /       \
+  v         v
+update_user_data_tool  get_credit_cards_tool
+   |          |
+   v          v
+Internal User Data  Database (database.py)
+     &          |
+  (recommender.py)
+       ^
+       | (Structured JSON)
+       |
+LangChain AgentExecutor
+       | (Final Answer: Conversational + Structured JSON)
+       v
+Flask Backend
+       | (JSON response: {response: "...", recommendations: [...]})
+       v
+Browser (index.html)
+       |
+       v
+User Output (Chat bubble + Card display)
+
+2. Agent Flow
+The LangChain agent follows a strict, multi-turn conversational flow to gather all necessary user information before providing recommendations.
+
+2.1. Initialization (agent.py)
+The ChatGoogleGenerativeAI model (gemini-2.0-flash) is initialized as the underlying Large Language Model.
+
+Two custom tools are defined:
+
+update_user_data_tool: Manages the collection and storage of user-provided data in a global _temp_user_data_storage dictionary.
+
+get_credit_cards_tool: Fetches and processes credit card recommendations based on user's monthly income, credit score, and preferred benefits. It expects a pure JSON string and extracts parameters after parsing.
+Returns a JSON string of a list of recommended cards, each with name, key reasons, and reward simulation.
+
+An AgentExecutor is created with a create_react_agent strategy, enabling the agent to reason and act (ReAct framework).
+
+2.2. Information Gathering Steps (Sequential)
+The agent is explicitly prompted to collect information one piece at a time, in a specific order:
+
+Monthly Income (INR): Asks for a numerical value.
+
+Spending Habits: Requests approximate monthly spending in categories like fuel, travel, groceries, and dining (e.g., "category: amount").
+
+Preferred Benefits: Inquires about desired benefits (e.g., cashback, travel points, lounge access) as a comma-separated list. Handles "any" as a special case.
+
+Existing Cards (Optional): Asks if the user has existing cards and expects a list of names or "no".
+
+Approximate Credit Score: Asks for a numerical value (e.g., 750) or allows "unknown."
+
+2.3. Tool Usage
+The agent's decision-making process (Thought and Action) is governed by its prompt and the available tools.
+
+update_user_data_tool
+Purpose: To store validated pieces of user data (monthly_income, spending_habits, preferred_benefits, existing_cards, credit_score) as they are collected.
+
+Input: Expects a pure JSON string (e.g., {"monthly_income": 50000.0}). It does not use args_schema directly in Tool definition; instead, the update_user_data_tool_func internally parses this string and performs type checking. This makes it robust to minor formatting variations from the LLM.
+
+Output: Returns a simple string message indicating "User data updated successfully."
+
+get_credit_cards_tool
+Purpose: To retrieve, process, and rank credit card recommendations once all necessary user data has been collected.
+
+Input: Expects a pure JSON string (e.g., {"user_income": 50000.0, "user_credit_score": 750, "preferred_benefits": "cashback, lounge access"}). Similar to update_user_data_tool, its function get_credit_cards_tool handles internal parsing and extraction from this string.
+
+Output: Returns a JSON string representing a list of recommended card dictionaries, each containing card_name, image_url, key_reasons, reward_simulation, net_benefit, and affiliate_link.
+
+3. Recommendation Logic (recommender.py)
+The recommender.py module takes the raw card data (filtered by database.py based on basic eligibility) and the collected user_data to generate personalized recommendations.
+
+get_card_recommendations(raw_cards: list[dict], user_data: dict) -> list[dict]:
+
+Input:
+
+raw_cards: List of dictionaries representing credit cards from the database. Crucially, database.py is configured to return sqlite3.Row objects that behave like dictionaries, ensuring recommender.py receives dictionary-like data.
+
+user_data: The _temp_user_data_storage dictionary containing all collected user information.
+
+Core Logic:
+
+Total Spending Calculation: Sums up monthly spending from user_data['spending_habits'].
+
+Base Reward Calculation: Estimates annual rewards based on card['reward_type'] (e.g., cashback, travel points, rewards, co-branded, fuel). It applies different multipliers or specific logic for each type.
+
+Special Perks Matching: Iterates through card['special_perks'] and user_data['preferred_benefits'] to identify additional reasons for recommendation (e.g., lounge access, dining benefits).
+
+Reason Generation: Constructs key_reasons strings based on the calculations and perk matches. Reasons are deduplicated.
+
+Net Annual Benefit: Calculates estimated_annual_rewards - (joining_fee + annual_fee).
+
+Filtering: Only cards with a positive net benefit or low fees (<= Rs. 750) are considered.
+
+Deduplication & Ranking: Unique cards are maintained (highest net_benefit for duplicates), and the top 5 are sorted by net_benefit in descending order.
+
+Output: A list of dictionaries, each formatted with card_name, image_url, key_reasons, reward_simulation, net_benefit, and affiliate_link. This structured output is critical for the frontend display.
+
+4. Prompt Design (_prompt_template_string in agent.py)
+The prompt is meticulously crafted to guide the LLM's behavior and ensure consistent output, especially for tool usage and final recommendations. It has been significantly enhanced to foster a super friendly and incredibly helpful conversational tone.
+
+Persona & Goal: Clearly defines the agent as "a super friendly and incredibly helpful credit card advisor!" whose main goal is to "make finding the perfect credit card an absolute breeze for users, all through a warm, clear, and genuinely empathetic conversation." This sets a strong expectation for the LLM's friendly tone.
+
+Sequential Information Collection (Friendly Flow):
+
+Emphasizes collecting information "step-by-step, one question at a time," making it "nice and easy."
+
+Explicitly states, "I'll always acknowledge your input with a friendly remark before moving on to the next exciting detail!"
+
+Each information point (Income, Spending Habits, Preferred Benefits, Existing Cards, Credit Score) now includes a "How to ask" section with suggestions for varied, inviting, and empathetic phrasing (e.g., "What's that figure looking like for you?," "This helps us understand your lifestyle better!").
+
+Includes friendly emojis (e.g., "ðŸ˜Š") in expected input descriptions.
+
+CRITICAL BEHAVIOR GUIDELINES (Friendly Advisor Tone):
+
+A. Information Gathering is a Breeze: Reassures the user that the agent "promise[s] to go through our list and ask for only one piece of information at a time."
+
+B. Data Storage is My Secret Power: Describes data storage as "lovingly understand[ing]" and "securely stor[ing]" information, with an emphasis on "pure JSON object string" for tool inputs, framed as being a "stickler for clean data!"
+
+C. Your Conversational Experience Matters: Reinforces the commitment to clear Final Answer blocks with thoughtful Thought: prefixes.
+
+D. I Keep Track for You: Explains current_user_data as a "handy little notepad" that the agent "always peek[s] at" for a smooth flow.
+
+Tool Usage Format: Provides a precise Thought, Action, Action Input, Observation structure, with the Thought: now including phrases like "My thoughtful internal reasoning for what to do next... I'll always be thinking about making your experience great!"
+
+Final Recommendation Format:
+
+The Thought: before calling get_credit_cards_tool is more enthusiastic: "Now, it's time to gather the perfect recommendations! I'll thoughtfully extract the necessary data..."
+
+The Final Answer is highly welcoming and positive: "Great news! Based on the wonderful information you've shared with me, here are some top credit card recommendations that might be an absolutely perfect fit for you! I'm thrilled to help you explore these options:"
+
+Follow-up/Acknowledgement Format: Explicitly guides the LLM to provide "polite, warm, and interactive question[s] or acknowledgement[s]."
+
+Iterative Refinement of Prompt and Tool Handling
+The current prompt and tool handling strategy (especially for update_user_data_tool and get_credit_cards_tool accepting a raw JSON string) is a result of iterative refinement to address common challenges with LLM-tool interaction, such as:
+
+Markdown Wrapping: LLMs often wrap JSON in triple backticks, which needs to be stripped.
+
+Inconsistent JSON Formatting: Variations in whitespace or minor malformations.
+
+LLM Hallucinating Arguments: Ensuring the LLM provides arguments in the expected single JSON string format.
+
+Preventing Multi-Question Turns: The "strictly one by one" instruction helps enforce this.
+
+By clearly defining the expected input and output formats at both the tool definition and prompt level, and by heavily emphasizing a friendly tone and interactive conversational patterns, we aim to minimize parsing errors and ensure a delightful user experience.
+```
+
+`Dockerfile`:
+
+```
+# Use the official Python image as a base
+FROM python:3.9-slim-buster
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install the Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the entire application code into the container
+COPY . .
+
+# Initialize the database and populate data during container build
+# This ensures the database file is present when the app starts
+RUN python -c "from database import init_db, populate_initial_data; init_db(); populate_initial_data()"
+
+# Expose the port your Flask app will listen on
+# Cloud Run sets the PORT environment variable dynamically
+ENV PORT=8080
+EXPOSE $PORT
+
+# Run the Flask application when the container starts
+# Use gunicorn or similar for production, for simplicity, using Flask's built-in server
+CMD ["python", "app.py"]
+
+```
+
+`README.md`:
+
+```md
+Credit Card Advisor
+Project Overview
+This Credit Card Advisor is an AI-powered conversational agent designed to help users find the best-fit credit cards based on their financial profile and spending habits. Built with Flask for the backend and a LangChain agent, it guides users through a series of questions to collect necessary information (monthly income, spending habits, preferred benefits, existing cards, and credit score), and then recommends suitable credit cards from a simulated database.
+
+Features
+Interactive Chat Interface: Users can converse naturally with the AI advisor.
+
+Personalized Recommendations: Provides credit card suggestions tailored to individual financial data.
+
+Detailed Card Information: For each recommended card, it displays the name, an image, key reasons for the recommendation, and a simulated annual reward/saving.
+
+Structured Data Collection: The agent intelligently collects user data step-by-step.
+
+Extensible Backend: Built on Flask and LangChain, allowing for easy expansion of features and integration with more complex tools or external APIs (e.g., real-time credit card data APIs).
+
+Demo
+Experience the live Credit Card Advisor here: https://credit-card-advisor-xvhbgr5zoq-ul.a.run.app
+
+ <https://www.youtube.com/watch?v=pu-LUZE8nW8>
+
+Setup Instructions
+Follow these steps to get the Credit Card Advisor up and running on your local machine.
+
+Prerequisites
+Python 3.9+
+
+pip (Python package installer)
+
+git (for cloning the repository)
+
+Installation
+Clone the Repository:
+
+git clone https://github.com/akhilkarwal161/credit_card_advisor.git
+cd credit_card_advisor
+
+Create and Activate a Virtual Environment:
+It's recommended to use a virtual environment to manage project dependencies.
+
+python3 -m venv venv
+source venv/bin/activate # On macOS/Linux
+# For Windows: .\venv\Scripts\activate
+
+Install Python Dependencies:
+Install all required libraries using pip and the requirements.txt file.
+
+pip install -r requirements.txt
+
+Database Initialization and Population:
+The application uses a SQLite database. This command will create the credit_cards.db file and populate it with initial dummy data.
+
+python -c "from database import init_db, populate_initial_data; init_db(); populate_initial_data()"
+
+(Note: This command clears and repopulates the database. If you have custom data, adjust accordingly.)
+
+### Set up Google Gemini API Key
+The LangChain agent uses the Google Gemini API. To protect your key, you should not hard-code it. Instead, use an environment file.
+
+1.  **Create a `.env` file:** In the root directory of the project, create a new file named `.env` by copying the example file.
+    ```bash
+    cp .env.example .env
+    ```
+
+2.  **Add your API key:** Open the new `.env` file and replace `YOUR_GOOGLE_API_KEY_HERE` with your actual API key obtained from Google.
+
+    ```
+    # .env
+    GOOGLE_API_KEY="your_actual_api_key_from_google"
+    ```
+
+The `.gitignore` file is already configured to ignore `.env`, so you won't accidentally commit your secret key.
+
+### Deployment Note
+When deploying to a service like Google Cloud Run, do not upload your `.env` file. Instead, configure the `GOOGLE_API_KEY` as a secret or environment variable directly in the cloud service's configuration settings. The application is set up to read this variable automatically.
+
+Running the Application
+Start the Flask Backend:
+
+python app.py
+
+The Flask application will start, typically running on http://127.0.0.1:5000/.
+
+Open in Browser:
+Open your web browser and navigate to the address provided by Flask (e.g., http://127.0.0.1:5000/).
+
+You can now interact with the Credit Card Advisor!
+
+## Technologies Used
+Backend: Flask (Python web framework)
+
+AI Agent: LangChain (for building LLM applications)
+
+LLM: Google Gemini 2.0 Flash
+
+Database: SQLite3
+
+Frontend: HTML, JavaScript, Tailwind CSS (for styling)
+
+Dependency Management: pip, requirements.txt
+```
+
+`agent.py`:
+
+```py
+# agent.py
+import os
+import json
+from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+from dotenv import load_dotenv
+from langchain_core.tools import Tool
+from langchain_core.prompts import PromptTemplate
+from langchain.agents import AgentExecutor, create_react_agent
+from typing import Optional, List, Dict, Any
+# Keep for internal type checking if needed later
+from pydantic import BaseModel, Field, ValidationError
+# Import database functions and recommender logic
+from database import get_cards_by_criteria
+from recommender import get_card_recommendations  # Import recommender function
+
+# Load environment variables from a .env file if it exists.
+load_dotenv()
+
+# IMPORTANT: Your API key should be set as an environment variable named GOOGLE_API_KEY.
+# You can do this by creating a .env file in the root of your project.
+# DO NOT commit your API key to version control.
+if not os.getenv("GOOGLE_API_KEY"):
+    raise ValueError(
+        "GOOGLE_API_KEY environment variable not set. Please create a .env file or set it manually.")
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+
+# Global placeholder for user data - the agent will update this
+_temp_user_data_storage = {
+    'monthly_income': None,
+    'spending_habits': {},
+    'preferred_benefits': [],
+    'existing_cards': [],
+    'credit_score': None
+}
+
+# --- Pydantic Models for Internal Type Checking (not directly for tool input schema) ---
+class UserUpdateInput(BaseModel):
+    """Internal model for validating updated user data fields."""
+    monthly_income: Optional[float] = Field(
+        None, description="The user's monthly income in INR.")
+    spending_habits: Optional[Dict[str, float]] = Field(
+        None, description="Approximate monthly spending on categories like fuel, travel, groceries, and dining. Format as a dictionary, e.g., {'fuel': 2000, 'groceries': 5000}.")
+    preferred_benefits: Optional[List[str]] = Field(
+        None, description="List of preferred benefits, e.g., ['cashback', 'lounge access']. If user says 'any', provide ['any'].")
+    existing_cards: Optional[List[str]] = Field(
+        None, description="List of existing credit card names, or an empty list if none.")
+    credit_score: Optional[int] = Field(
+        None, description="The user's approximate credit score (numerical value) or None if unknown.")
+
+
+# --- Tool Functions ---
+
+
+def get_credit_cards_tool(data_json_string: str) -> str:
+    """
+    Fetches and processes credit card recommendations based on user's monthly income, credit score,
+    and preferred benefits. It expects a pure JSON string and extracts parameters after parsing.
+    Returns a JSON string of a list of recommended cards, each with name, key reasons, and reward simulation.
+    """
+    print(
+        f"get_credit_cards_tool: Received raw string input: '{data_json_string}'")
+
+    global _temp_user_data_storage  # Access the global storage for full context
+
+    try:
+        # Aggressively strip any surrounding characters including markdown backticks and whitespace
+        cleaned_json_string = data_json_string.strip().strip('`').strip()
+
+        if not cleaned_json_string:
+            raise ValueError("Input string is empty after cleaning.")
+
+        parsed_input_dict = json.loads(cleaned_json_string)
+        print(
+            f"get_credit_cards_tool: Parsed JSON string: {parsed_input_dict}")
+
+        user_income = parsed_input_dict.get('user_income')
+        user_credit_score = parsed_input_dict.get('user_credit_score')
+        preferred_benefits_str = parsed_input_dict.get(
+            'preferred_benefits', "")
+
+        # Basic type checking and error handling for extracted values
+        if not isinstance(user_income, (int, float)):
+            raise ValueError(
+                f"Invalid type for user_income: {type(user_income)}")
+        if not isinstance(user_credit_score, int):
+            raise ValueError(
+                f"Invalid type for user_credit_score: {type(user_credit_score)}")
+        if not isinstance(preferred_benefits_str, str):
+            raise ValueError(
+                f"Invalid type for preferred_benefits: {type(preferred_benefits_str)}")
+
+
+        benefits_list = [b.strip().lower() for b in preferred_benefits_str.split(',')
+                         ] if preferred_benefits_str else []
+
+        if 'any' in benefits_list:  # Handle "any" as a special case for benefits
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, [])
+        else:
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, benefits_list)
+
+        # Use the recommender to get the final, ranked recommendations
+        final_recommendations = get_card_recommendations(
+            raw_cards, _temp_user_data_storage)
+
+        # Return the recommendations as a JSON string
+        return json.dumps(final_recommendations)
+
+    except json.JSONDecodeError as e:
+        print(f"get_credit_cards_tool: JSONDecodeError: {e}")
+        return f"Error: Invalid JSON format for get_credit_cards_tool. Please ensure your Action Input is a pure JSON object string: {e}"
+    except ValueError as e:
+        print(f"get_credit_cards_tool: ValueError: {e}")
+        return f"Error: Missing or invalid data types for get_credit_cards_tool: {e}"
+    except Exception as e:
+        print(f"get_credit_cards_tool: General Error: {e}")
+        return f"Error fetching credit card recommendations: {e}"
+
+
+# Expects a single string argument
+def update_user_data_tool_func(data_json_string: str) -> str:
+    """
+    Updates the global user data dictionary with provided information.
+    It expects a pure JSON string and updates the storage after parsing.
+    """
+    global _temp_user_data_storage
+
+    print(
+        f"update_user_data_tool_func: Received raw string input: '{data_json_string}'")
+
+    try:
+        # Aggressively strip any surrounding characters including markdown backticks and whitespace
+        cleaned_json_string = data_json_string.strip().strip('`').strip()
+
+        if not cleaned_json_string:
+            raise ValueError("Input string is empty after cleaning.")
+
+        parsed_input_dict = json.loads(cleaned_json_string)
+        print(
+            f"update_user_data_tool_func: Parsed JSON string: {parsed_input_dict}")
+
+        # Manually update _temp_user_data_storage with type checking, no explicit conversions unless necessary
+        if 'monthly_income' in parsed_input_dict and isinstance(parsed_input_dict['monthly_income'], (int, float)):
+            _temp_user_data_storage['monthly_income'] = parsed_input_dict['monthly_income']
+        elif 'monthly_income' in parsed_input_dict and parsed_input_dict['monthly_income'] is not None:
+            # If it's a string, try converting to float, otherwise warn
+            try:
+                _temp_user_data_storage['monthly_income'] = float(
+                    parsed_input_dict['monthly_income'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert monthly_income to float: {parsed_input_dict['monthly_income']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['monthly_income'] = None
+
+        if 'spending_habits' in parsed_input_dict and isinstance(parsed_input_dict['spending_habits'], dict):
+            _temp_user_data_storage['spending_habits'] = parsed_input_dict['spending_habits']
+        elif 'spending_habits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for spending_habits: {parsed_input_dict['spending_habits']}")
+
+        if 'preferred_benefits' in parsed_input_dict and isinstance(parsed_input_dict['preferred_benefits'], list):
+            _temp_user_data_storage['preferred_benefits'] = parsed_input_dict['preferred_benefits']
+        elif 'preferred_benefits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for preferred_benefits: {parsed_input_dict['preferred_benefits']}")
+
+        if 'existing_cards' in parsed_input_dict and isinstance(parsed_input_dict['existing_cards'], list):
+            _temp_user_data_storage['existing_cards'] = parsed_input_dict['existing_cards']
+        elif 'existing_cards' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for existing_cards: {parsed_input_dict['existing_cards']}")
+
+        if 'credit_score' in parsed_input_dict and isinstance(parsed_input_dict['credit_score'], int):
+            _temp_user_data_storage['credit_score'] = parsed_input_dict['credit_score']
+        elif 'credit_score' in parsed_input_dict and parsed_input_dict['credit_score'] is not None:
+            # If it's a float, try converting to int, otherwise warn
+            try:
+                _temp_user_data_storage['credit_score'] = int(
+                    parsed_input_dict['credit_score'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert credit_score to int: {parsed_input_dict['credit_score']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['credit_score'] = None
+
+        print(
+            f"update_user_data_tool_func: Current _temp_user_data_storage after merge: {_temp_user_data_storage}")
+        return "User data updated successfully."
+    except json.JSONDecodeError as e:
+        print(f"update_user_data_tool_func: JSONDecodeError: {e}")
+        return f"Error: Invalid JSON format for data update. Please ensure your Action Input is a pure JSON object string: {e}"
+    except Exception as e:
+        print(f"update_user_data_tool_func: General Error during update: {e}")
+        return f"Error updating user data: {e}"
+
+
+# List of tools available to the LangChain agent.
+tools = [
+    Tool(
+        name="get_credit_cards_tool",
+        func=get_credit_cards_tool,
+        # Removed args_schema for get_credit_cards_tool to manually parse input
+        description="Useful for fetching and processing credit card recommendations. The Action Input MUST be a pure JSON string (e.g., '{\"user_income\": 50000.0, \"user_credit_score\": 750, \"preferred_benefits\": \"cashback\"}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'user_income' (float), 'user_credit_score' (int), and 'preferred_benefits' (optional, comma-separated string)."
+    ),
+    Tool(
+        name="update_user_data_tool",
+        func=update_user_data_tool_func,
+        # args_schema is removed here, as the function now expects a single raw string
+        description="Call this tool to update the user's collected data. The Action Input MUST be a pure JSON string (e.g., '{\"monthly_income\": 50000.0}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'monthly_income' (float), 'spending_habits' (dict), 'preferred_benefits' (list of strings), 'existing_cards' (list of strings), or 'credit_score' (int)."
+    ),
+]
+
+# Prompt template string - DEFINED HERE (moved for correct order)
+_prompt_template_string = """
+You are a super friendly and incredibly helpful credit card advisor! Your main goal is to make finding the perfect credit card an absolute breeze for users, all through a warm, clear, and genuinely empathetic conversation. Let's make this a delightful experience!
+
+To help users find their ideal card, we need a little bit of information from them. We'll go through it **step-by-step, one question at a time**, so it's nice and easy. And don't worry, I'll always acknowledge your input with a friendly remark before moving on to the next exciting detail!
+
+Here's the essential info we'll gather, in a friendly flow:
+
+1.  **Your Monthly Income (in INR):**
+    * **How to ask:** Let's start with your approximate monthly income in Indian Rupees. What's that figure looking like for you? Feel free to ask this in a few different, inviting ways!
+    * **Expected input:** Just a numerical value, please! ðŸ˜Š
+
+2.  **Your Spending Habits:**
+    * **How to ask:** Wonderful! With your income noted, let's explore your monthly spending a bit. Could you share your approximate monthly spends on categories like fuel, travel, groceries, and dining? A simple "category: amount" format works perfectly (e.g., 'fuel: 2000, groceries: 5000'). This helps us understand your lifestyle better!
+    * **Expected input:** A lovely list of categories and their approximate amounts.
+
+3.  **Your Preferred Benefits:**
+    * **How to ask:** Fantastic, almost there! Now, what kind of benefits really excite you in a credit card? Are you dreaming of cashback, accumulating travel points, enjoying lounge access, or something else? Just let me know your top preferences, separated by commas! If you're open to anything, simply say 'any'!
+    * **Expected input:** A comma-separated list of benefits, or the word 'any'.
+
+4.  **Your Existing Cards (Optional):**
+    * **How to ask:** Just one more quick question about your current cards, if any! Do you happen to hold any existing credit cards right now? If not, no worries at all, just say 'no'!
+    * **Expected input:** A list of card names, or 'no'.
+
+5.  **Your Approximate Credit Score:**
+    * **How to ask:** Last but not least, your approximate credit score! This helps us find cards you're more likely to qualify for. What's that number looking like for you (e.g., 750)? If you're unsure, it's totally fine to say 'unknown'!
+    * **Expected input:** A numerical value or 'unknown'.
+
+**âœ¨ CRITICAL BEHAVIOR GUIDELINES FOR ME (Your Friendly Advisor)! âœ¨**
+
+* **A. Information Gathering is a Breeze:** I *promise* to go through our list and ask for only **one piece of information at a time**. No overwhelming you with multiple questions at once! My tone will always be super polite and helpful.
+* **B. Data Storage is My Secret Power:** As soon as I lovingly understand each piece of information you share, I'll *immediately* use my `update_user_data_tool` to securely store it. Remember, the input to this tool MUST be a pure JSON object string, without any pesky markdown (like triple backticks) or extra text. I'm a stickler for clean data!
+    * Example for income: `Action Input: {{"monthly_income": 50000.0}}`
+    * Example for spending: `Action Input: {{"spending_habits": {{"fuel": 2000.0, "groceries": 5000.0}}}}`
+    * Example for benefits: `Action Input: {{"preferred_benefits": ["cashback", "lounge access"]}}`
+    * Example for existing cards: `Action Input: {{"existing_cards": []}}`
+    * Example for credit score: `Action Input: {{"credit_score": 750}}`
+* **C. Your Conversational Experience Matters:** When I need to ask a follow-up question or share a little thought *before* our grand reveal of card recommendations, I'll always present my response in a clear `Final Answer` block, always starting with a thoughtful `Thought:`.
+* **D. I Keep Track for You:** The `current_user_data` is my handy little notepad! I'll always peek at this to see what info we've gathered so far, so I know exactly what to ask next or when it's time for the big recommendations! I'll parse it as a JSON object in my `Thought:` process.
+
+Here is the current state of collected user data (my notepad!): {current_user_data}
+
+Once we have gathered ALL these wonderful pieces of information and I've securely stored them, I'll excitedly call upon the `get_credit_cards_tool`. When I do this, I'll make sure to pull your `user_income`, `user_credit_score`, and `preferred_benefits` directly from my notepad (`current_user_data`).
+
+Finally, get ready for the grand reveal! I'll present your personalized credit card recommendations. For each fantastic card, I'll highlight:
+* Its fabulous Name!
+* The super-duper Key Reasons why it's a great fit for you!
+* A fun Reward Simulation (like, "You could potentially save/earn up to Rs. 8,000/year cashback!")
+
+TOOLS:
+------
+You have access to the following tools (my little helpers!):
+{tools}
+
+To use a tool, I'll think very carefully and use this precise format:
+
+```
+Thought: [My thoughtful internal reasoning for what to do next to gather information or process it. I'll always be thinking about making your experience great!]
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action (MUST be a pure JSON string, with no surrounding markdown or extra text. Example: {{"monthly_income": 50000.0}} or {{}} for tools with no input)
+Observation: the result of the action (what my helper tool tells me!)
+```
+
+When I've gathered ALL the necessary user information AND my helpful `get_credit_cards_tool` has done its magic, I'll use this special format for your grand final response:
+
+```
+Thought: I have successfully gathered all the wonderful user information and stored it. Now, it's time to gather the perfect recommendations! I'll thoughtfully extract the necessary data from my notepad ('current_user_data') and call the get_credit_cards_tool to fetch those amazing recommendations for you.
+Action: get_credit_cards_tool
+Action Input: {{"user_income": <EXTRACT_INCOME_FROM_CURRENT_USER_DATA>, "user_credit_score": <EXTRACT_CREDIT_SCORE_FROM_CURRENT_USER_DATA>, "preferred_benefits": "<EXTRACT_COMMA_SEPARATED_BENEFITS_FROM_CURRENT_USER_DATA>"}}
+Observation: [string representation of final processed recommendations]
+Thought: Hooray! I've received your fantastic credit card recommendations! I'm so excited to present them to you in a clear, friendly, and easy-to-understand format.
+Final Answer: Great news! Based on the wonderful information you've shared with me, here are some top credit card recommendations that might be an absolutely perfect fit for you! I'm thrilled to help you explore these options: [YOUR JSON ARRAY OF CARD RECOMMENDATIONS HERE]
+```
+
+When I need to ask you a follow-up question or gently acknowledge your input, I'll use this format:
+
+```
+Thought: [My internal reasoning for the next delightful question or warm acknowledgement. Always thinking about our friendly conversation!]
+Final Answer: [My polite, warm, and interactive question or acknowledgement to you!]
+```
+
+Let's begin our friendly chat!
+
+User Input: {input}
+Chat History: {chat_history}
+{agent_scratchpad}
+"""
+
+prompt = PromptTemplate.from_template(_prompt_template_string)
+
+# Create the LangChain agent using the ReAct (Reasoning and Acting) framework.
+agent = create_react_agent(llm, tools, prompt)
+
+# Create an AgentExecutor to run the agent.
+agent_executor = AgentExecutor(
+    agent=agent, tools=tools, verbose=True, handle_parsing_errors=True
+)
+
+
+def get_agent_executor():
+    """Returns the initialized agent executor."""
+    return agent_executor
+
+
+def get_temp_user_data_storage():
+    """Returns the temporary user data storage dictionary."""
+    return _temp_user_data_storage
+
+
+def clear_temp_user_data_storage():
+    """Clears the temporary user data storage."""
+    global _temp_user_data_storage
+    _temp_user_data_storage = {
+        'monthly_income': None,
+        'spending_habits': {},
+        'preferred_benefits': [],
+        'existing_cards': [],
+        'credit_score': None
+    }
+    return _temp_user_data_storage
+
+```
+
+`app.py`:
+
+```py
+# app.py
+from flask import Flask, render_template, request, jsonify
+import json
+import re  # Import the regex module
+import os  # Import os to access environment variables
+
+# Import only what's necessary from agent.py: the agent executor object and the clear function
+from agent import get_agent_executor, clear_temp_user_data_storage, get_temp_user_data_storage
+from database import init_db, populate_initial_data, clear_duplicate_cards
+
+app = Flask(__name__)
+
+# Initialize the LangChain agent executor once when the app starts
+agent_executor = get_agent_executor()
+
+# --- Session Management for Chat History ---
+user_sessions = {}  # This will manage chat history per session.
+
+
+@app.route('/')
+def index():
+    """Renders the main HTML page for the chat interface."""
+    return render_template('index.html')
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """
+    Handles chat messages from the frontend, feeding them to the LangChain agent
+    for dynamic conversation and recommendations.
+    """
+    if not request.is_json:
+        print("Warning: Incoming request is not JSON or has incorrect Content-Type.")
+        return jsonify({"response": "Invalid request: Expected JSON content.", "recommendations": []}), 400
+
+    request_data = request.json
+    user_message = request_data.get('message', '') if request_data else ''
+    session_id = request_data.get(
+        'session_id', 'default_session') if request_data else 'default_session'
+
+    # Initialize session data if it does not exist
+    if session_id not in user_sessions:
+        user_sessions[session_id] = {
+            'chat_history': [],  # Stores messages for the LangChain agent's context
+        }
+        # For simplicity in this demo, we'll clear the global temp storage on a new "session".
+        # In a multi-user app, you'd manage per-session state more robustly (e.g., in a database).
+        clear_temp_user_data_storage()
+
+    session_data = user_sessions[session_id]
+    chat_history = session_data['chat_history']
+
+    response_text = ""
+    # This will be populated if the agent's output contains structured recommendations
+    recommendations = []
+
+    # Retrieve the current state of user data to pass to the agent (for agent's internal awareness)
+    current_user_data = get_temp_user_data_storage()
+
+    # Prepare input for the agent
+    agent_input = {
+        "input": user_message,
+        "chat_history": chat_history,
+        # Pass as JSON string
+        "current_user_data": json.dumps(current_user_data)
+    }
+
+    try:
+        # Invoke the LangChain agent to get a response
+        agent_response = agent_executor.invoke(agent_input)
+        raw_agent_output = agent_response.get(
+            'output', "I'm sorry, I couldn't process that.")
+
+        # Default conversational response if no structured recommendations are found/extracted
+        response_text = raw_agent_output
+
+        # --- Extract structured recommendations from agent's response if available ---
+        # Use regex to find a JSON array pattern (starting with '[' and ending with ']')
+        json_match = re.search(r'\[.*\]', raw_agent_output, re.DOTALL)
+
+        if json_match:
+            json_str = json_match.group(0)  # Get the matched JSON string
+            try:
+                parsed_recommendations = json.loads(json_str)
+                if isinstance(parsed_recommendations, list):
+                    recommendations = parsed_recommendations
+
+                    # Set a generic conversational intro for the chat window
+                    response_text = "Here are some credit card recommendations based on your preferences:"
+
+                    # Optionally, you could also remove the JSON part from raw_agent_output
+                    # if you wanted to display any non-JSON text the agent provided.
+                    # For now, we prioritize the clean intro + structured recommendations.
+
+            except json.JSONDecodeError as e:
+                print(
+                    f"Warning: Regex found potential JSON, but JSONDecodeError occurred: {json_str[:100]}... Error: {e}")
+                # If parsing fails, the original raw_agent_output remains in response_text
+            except Exception as parse_e:
+                print(
+                    f"Warning: General error parsing potential JSON from agent's recommendations: {parse_e}")
+                # If any other parsing error occurs, keep the original response_text
+
+    except Exception as e:
+        print(f"Error invoking agent: {e}")
+        response_text = "I apologize, I encountered an internal error. Could you please rephrase or try again?"
+        # Clear recommendations on agent invocation error
+        recommendations = []
+
+    # Update chat history with the user's message and agent's response
+    # The 'response_text' here should only be the conversational part
+    chat_history.append({"role": "user", "content": user_message})
+    chat_history.append({"role": "assistant", "content": response_text})
+
+    return jsonify({"response": response_text, "recommendations": recommendations})
+
+
+if __name__ == '__main__':
+    # Initialize the SQLite database (creates the file and table if they don't exist).
+    init_db()
+
+    # Clear any duplicate entries before populating
+    clear_duplicate_cards()
+
+    # Populate the database with initial dummy data
+    populate_initial_data()
+
+    # Get the port from environment variable, default to 8080 if not set (Cloud Run will set this)
+    port = int(os.environ.get('PORT', 8080))
+    # Listen on all interfaces and dynamic port
+    app.run(host='0.0.0.0', port=port, debug=True)
+
+```
+
+`database.py`:
+
+```py
+# database.py
+import sqlite3
+import json  # Used for storing spending_habits as JSON string if needed, or just for string representation
+from typing import Optional, List, Dict, Any
+
+DATABASE_NAME = 'credit_cards.db'
+
+
+def get_db_connection():
+    """Establishes a connection to the SQLite database and sets row_factory to sqlite3.Row."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    # Set row_factory to sqlite3.Row to allow accessing columns by name (like a dictionary)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initializes the SQLite database and creates the credit_cards table if it doesn't exist."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS credit_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            issuer TEXT NOT NULL,
+            joining_fee REAL NOT NULL,
+            annual_fee REAL NOT NULL,
+            reward_type TEXT NOT NULL,
+            reward_rate REAL NOT NULL,
+            eligibility_income REAL NOT NULL,
+            eligibility_credit_score INTEGER NOT NULL,
+            special_perks TEXT,
+            affiliate_link TEXT,
+            image_url TEXT,
+            UNIQUE(name, issuer) ON CONFLICT IGNORE
+        );
+    ''')
+    conn.commit()
+    conn.close()
+    print("Database initialized successfully.")
+
+
+def add_card(
+    name: str, issuer: str, joining_fee: float, annual_fee: float, reward_type: str, reward_rate: float,
+    eligibility_income: float, eligibility_credit_score: int, special_perks: Optional[str],
+    affiliate_link: Optional[str], image_url: Optional[str]
+) -> str:
+    """Inserts a new credit card into the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO credit_cards (
+                name, issuer, joining_fee, annual_fee, reward_type, reward_rate,
+                eligibility_income, eligibility_credit_score, special_perks,
+                affiliate_link, image_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            name, issuer, joining_fee, annual_fee, reward_type, reward_rate,
+            eligibility_income, eligibility_credit_score, special_perks,
+            affiliate_link, image_url
+        ))
+        conn.commit()
+        return f"Card '{name}' from '{issuer}' added successfully."
+    except sqlite3.IntegrityError:
+        return f"Error: A card with the name '{name}' and issuer '{issuer}' already exists. Skipping."
+    except Exception as e:
+        return f"Error adding card: {e}"
+    finally:
+        conn.close()
+
+
+def get_cards_by_criteria(user_income: float, user_credit_score: int, preferred_benefits_list: Optional[List[str]]) -> List[Dict[str, Any]]:
+    """
+    Retrieves credit cards from the database based on income, credit score, and preferred benefits.
+    If preferred_benefits_list is empty or contains "any", it returns all cards matching income and credit score.
+    Returns a list of dictionaries, where each dictionary represents a card.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM credit_cards WHERE eligibility_income <= ? AND eligibility_credit_score <= ?"
+    params = [user_income, user_credit_score]
+
+    if preferred_benefits_list and "any" not in [b.lower() for b in preferred_benefits_list]:
+        # Build dynamic WHERE clause for benefits
+        benefit_conditions = []
+        for benefit in preferred_benefits_list:
+            # Search for benefit in special_perks or reward_type (case-insensitive)
+            benefit_conditions.append(
+                "(LOWER(special_perks) LIKE LOWER(?) OR LOWER(reward_type) LIKE LOWER(?))")
+            params.extend([f"%{benefit}%", f"%{benefit}%"])
+
+        # Use 'AND' to combine criteria, and 'OR' for multiple benefits
+        query += " AND (" + " OR ".join(benefit_conditions) + ")"
+
+    # Order by eligibility for more accessible cards first, then by potential reward rate
+    query += " ORDER BY eligibility_income ASC, eligibility_credit_score ASC, reward_rate DESC"
+
+    cursor.execute(query, params)
+    raw_cards_rows = cursor.fetchall()
+    conn.close()
+
+    # Convert sqlite3.Row objects to standard Python dictionaries
+    return [dict(row) for row in raw_cards_rows]
+
+
+def clear_duplicate_cards():
+    """
+    Removes duplicate credit card entries from the database, keeping one instance.
+    Duplicates are identified by matching 'name' and 'issuer'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Create a temporary table with unique rows
+        cursor.execute('''
+            CREATE TEMPORARY TABLE IF NOT EXISTS temp_credit_cards AS
+            SELECT * FROM credit_cards GROUP BY name, issuer;
+        ''')
+
+        # Clear the original table
+        cursor.execute('DELETE FROM credit_cards;')
+
+        # Insert unique rows back into the original table
+        cursor.execute(
+            'INSERT INTO credit_cards SELECT * FROM temp_credit_cards;')
+
+        # Drop the temporary table
+        cursor.execute('DROP TABLE temp_credit_cards;')
+
+        conn.commit()
+        print("Duplicate entries removed from the database.")
+    except Exception as e:
+        print(f"Error clearing duplicate cards: {e}")
+    finally:
+        conn.close()
+
+
+def populate_initial_data():
+    """
+    Populates the database with initial dummy credit card data if the database is empty.
+    This prevents re-adding data on every run after the initial setup.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM credit_cards")
+    count = cursor.fetchone()[0]
+    conn.close()  # Close connection after count
+
+    if count == 0:
+        print("Adding dummy data...")
+        cards_to_add = [
+            ("HDFC Diners Club Black Metal Edition Credit Card", "HDFC Bank", 10000.0, 10000.0, "Travel Points", 0.0333, 60000.0, 750,
+             "Unlimited airport lounge access (primary & add-on), High base rewards rate, 10X reward points on SmartBuy, 2X on weekend dining, 1:1 redemption, Club Marriott, Amazon, Swiggy One annual memberships, Low forex markup fee 2%, 10000 RP on Rs. 4 lakh spend per quarter, 6 complimentary golf games per quarter", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/04/HDFC-Diners-Club-Black-Credit-Card.png"),
+            ("Axis Bank Reserve Credit Card", "Axis Bank", 50000.0, 50000.0, "Travel Points", 0.04, 70000.0, 760,
+             "Unlimited domestic & international lounge visits via Priority Pass, Low forex mark-up fee 1.5%, 2X reward points on international spends, Up to 30 EDGE reward points for every Rs. 200 spent, B1G1 BookMyShow tickets, ITC Culinaire, Accorplus, Club Marriott & EazyDiner Prime memberships, 50 free golf rounds/year", "#", "https://www.paisabazaar.com/wp-content/uploads/2022/03/Axis-Reserve-Credit-Card.png"),
+            ("Axis Atlas Credit Card", "Axis Bank", 5000.0, 5000.0, "Travel Points", 0.05, 35000.0, 700,
+             "2.5X EDGE Miles on Travel, Up to 12 international and 18 domestic lounge access per year, Up to 2,500 bonus EDGE Miles as welcome benefit, Up to 5 EDGE Miles per Rs. 100 spent on travel, Redeem EDGE Miles at value of 1 EDGE Mile = 2 Partner Points, Milestone benefits up to 5,000 EDGE Miles", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/02/Axis-Atlas-1-300x190.png"),
+            ("HDFC Regalia Gold Credit Card", "HDFC Bank", 2500.0, 2500.0, "Rewards", 0.0267, 30000.0, 710, "5X reward points on Nykaa, Myntra, Marks & Spencer and Reliance Digital, 4 reward points per Rs. 150 across all retail spends, Complimentary Swiggy One & MMT Black Elite Memberships, Gift voucher Rs. 2,500 on joining fee payment, 6 complimentary international lounge visits, 12 complimentary domestic airport lounge visits per year, Marks & Spencer/ Reliance Digital/ Myntra/ Marriott vouchers on quarterly spends, Flight vouchers on annual spends", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/03/HDFC-Regalia-Gold-Credit-Card.png"),
+            ("YES Bank Paisabazaar PaisaSave Credit Card", "YES Bank", 0.0, 499.0, "Cashback", 0.015, 15000.0, 650, "3% Cashback Points on e-commerce spends (max 5,000 points/month), Unlimited 1.5% Cashback Points on all other spends, including UPI, Redeemable as statement credit 1:1, Renewal fee waived on Rs. 1.2 lakh annual spends, 1% fuel surcharge waiver",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/08/YES-Bank-Paisabazaar-PaisaSave-Credit-Card.png"),
+            ("Cashback SBI Card", "SBI Card", 999.0, 999.0, "Cashback", 0.01, 20000.0, 670, "5% cashback on all online spends (no merchant restriction), 1% cashback across all offline spends, Cashback up to Rs. 5,000 per month, Renewal fee reversed on Rs. 2 lakh annual spend, 1% fuel surcharge waiver",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/04/Cashback-SBI-Card.png"),
+            ("HSBC TravelOne Credit Card", "HSBC", 4999.0, 4999.0, "Travel Points", 0.02, 30000.0, 700, "2x rewards on all travel bookings, Up to 20% off on Zomato, Yatra, EaseMyTrip, Cashback Rs. 1,000, Postcard Hotels voucher Rs. 3,000, 3 months EazyDiner Prime, 4 reward points on every Rs. 100 spent on flights/travel aggregators/foreign currency, 2 reward points on every Rs. 100 other categories, 1 reward point = 1 Air Mile or Hotel Point, 10,000 bonus RP on Rs. 12 lakh annual spend, 6 domestic and 4 international airport lounge access, 4 rounds and 12 golf lessons/year, Up to 20% off duty-free shopping via AdaniOne", "#", "https://www.paisabazaar.com/wp-content/uploads/2025/01/HSBC-TravelOne-Credit-Card.png"),
+            ("Axis Bank SELECT Credit Card", "Axis Bank", 3000.0, 3000.0, "Rewards", 0.05, 28000.0, 690, "2X EDGE Reward Points across all retail transactions, 10,000 EDGE Reward Points welcome benefit, Flat Rs. 500 off per month on BigBasket, Rs. 200 off on Swiggy twice a month, Up to 12 complimentary international lounge visits, 2 domestic lounge visits per quarter, Up to 12 complimentary golf rounds",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2015/11/Axis-Bank-Select-Credit-Card.png"),
+            ("Tata Neu Infinity HDFC Bank Credit Card", "HDFC Bank", 1499.0, 1499.0, "Co-branded", 0.015, 22000.0, 680,
+             "Up to 10% value-back on Tata Neu spends, 8 domestic and 4 international Priority Pass lounge access per year, 5% NeuCoins on all non-EMI spends at Tata Neu & its partner brands, Additional 5% NeuCoins on select spends, 1.5% NeuCoins on UPI/non-Tata/merchant EMI, 1,499 NeuCoins after first spend, Low forex markup fee 2%", "#", "https://www.paisabazaar.com/wp-content/uploads/2017/10/Tata-Neu-Infinity-HDFC-Bank-Credit-Card.png"),
+            ("IndianOil RBL Bank XTRA Credit Card", "RBL Bank", 1500.0, 1500.0, "Fuel", 0.075, 15000.0, 660, "Up to 8.5% savings on IOCL fuel spends, 1,000 Fuel Points on reaching Rs. 75,000 quarterly spends, 15 Fuel Points per Rs. 100 on IOCL fuel, 1% fuel surcharge waiver (Rs. 500-4000), 2 Fuel Points per Rs. 100 other categories, 1 Fuel Point = Rs. 0.50 for IOCL fuel, 3,000 Fuel Points welcome benefit, Annual Fee waived on Rs. 2.75 lakh annual spends",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/08/IndianOil-RBL-Bank-Credit-Cards.webp"),
+            ("SBI Prime Credit Card", "SBI Card", 2999.0, 2999.0, "Rewards", 0.02, 25000.0, 700, "10 reward points per Rs. 100 on dining, groceries, movies and departmental stores, E-gift vouchers worth Rs. 3,000 welcome benefit, Complimentary Club Vistara membership, Complimentary international and domestic lounge access",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/01/sbi-prime-cardface.png"),
+            ("American Express Membership Rewards Credit Card", "American Express", 1000.0, 4500.0, "Rewards", 0.02, 30000.0, 720, "1 Membership Reward point per Rs. 50, Bonus 5,000 Membership Rewards points upon First Year Card Renewal, Redemption options cover everyday brands like Flipkart & Amazon to premium ones like Tanishq and Taj, 4,000 Membership Rewards Points on card activation, Monthly milestone benefits",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/American-Express-Membership-Rewards%C2%AE-Credit-Card.png"),
+            ("HDFC MoneyBack+ Credit Card", "HDFC Bank", 500.0, 500.0, "Cashback", 0.0133, 15000.0, 650, "10X CashPoints on Amazon, BigBasket, Flipkart, Reliance Smart SuperStore & Swiggy, 2 CashPoints per Rs. 150 on other spends, 500 cashpoints on card activation, Quarterly milestone benefit",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/08/HDFC-MoneyBack-Plus-Credit-Card.png"),
+            ("Axis Bank Horizon Credit Card", "Axis Bank", 3000.0, 3000.0, "Travel Points", 0.05, 35000.0, 700,
+             "5 EDGE Miles per Rs. 100 spent on Travel EDGE portal and at direct airline websites/counters, 1 EDGE Mile = 1 Partner Point, 8 complimentary visits to international and up to 32 to domestic airport lounges per year", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/Axis-Bank-Horizon-Credit-Card.png"),
+            ("American Express Platinum Travel Credit Card", "American Express", 5000.0, 5000.0, "Travel Points", 0.02, 40000.0, 730,
+             "1 Membership Rewards Point for every Rs. 50 spent, 8 domestic lounge visits per year, 25,000 Membership Rewards Points and Taj Stay voucher worth Rs. 10,000 on spending Rs. 4 Lakh in a year", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/American-Express%C2%AE-Platinum-Travel-Credit-Card.png"),
+            ("MakeMyTrip ICICI Bank Credit Card", "ICICI Bank", 999.0, 999.0, "Travel", 0.01, 20000.0, 680, "Unlimited 6% myCash on hotel bookings via MakeMyTrip, Unlimited 3% myCash on flights, holiday packages, cabs & bus bookings via MakeMyTrip, 1% myCash on all other spends, Low forex markup fee of 0.99%, Lounge access is not spend-based, 25 myCash on every train booking via MakeMyTrip, Joining and renewal benefits via MMT voucher and Gold memberships",
+             "#", "https://www.paisabazaar.com/wp-content/webp-express/webp-images/doc-root/wp-content/uploads/2021/12/MakeMyTrip-ICICI-Credit-Card-300x190.png.webp"),
+            ("HDFC Infinia Credit Card â€“ Metal Edition", "HDFC Bank", 12500.0, 12500.0, "Rewards", 0.0333, 80000.0, 780,
+             "Invite-only, All-in-one benefits (travel, shopping, movies etc.), Complimentary Club Marriott membership, Complimentary luxury hotel membership, 1+1 complimentary weekend buffet at ITC hotels, Unlimited lounge access worldwide, Low forex markup fee 2%, Unlimited complimentary golf games", "#", "https://www.paisabazaar.com/wp-content/uploads/2017/10/HDFC-infinia-metal-edition.jpg"),
+            ("American Express Platinum Card", "American Express", 66000.0, 66000.0, "Premium", 0.01, 100000.0, 790, "Stay vouchers Rs. 45,000 from Taj/SeleQtions/Vivanta Hotels, Excellent golf benefit, Multiple hotel memberships (Accor Plus, I Prefer, Marriott Bonvoy, Hilton Honors, Taj Reimagined), Exclusive deals on airlines (Qatar, Air France, Emirates etc.), World-class Platinum concierge service, Unlimited airport lounge access, VIP-only event invitations",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/11/American-Express-Platinum-Credit-Card.png"),
+            ("ICICI Bank Emeralde Private Metal Credit Card", "ICICI Bank", 12499.0, 12499.0, "Rewards", 0.06, 75000.0, 770, "Complimentary memberships to Taj Epicure, EazyDiner Prime and Priority Pass Program, 1:1 redemption ratio for reward points, Unlimited access to golf lessons or rounds, Unlimited domestic & international lounges at select airports, Low forex markup fee 2%, Buy one get one ticket free on BookMyShow, Overall benefits on dining/movies/entertainment/golf/travel, Exclusive concierge services",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2023/10/ICICI-Bank-Emeralde-Private-Metal-Credit-Card-300x190.webp"),
+            ("BPCL SBI Card Octane", "SBI Card", 1499.0, 1499.0, "Fuel", 0.01, 15000.0, 660, "7.25% value back on BPCL fuel purchases, 6,000 bonus reward points welcome benefit, 1% surcharge waiver across all BPCL petrol pumps, Additional benefits like complimentary lounge visit, fraud liability cover, 25 reward points for every Rs. 100 spent at BPCL Fuel, Lubricants & Bharat Gas, Instant reward redemption at select BPCL petrol pumps",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2020/11/BPCL-SBI-Card-Octane-300x197.png"),
+            ("IDFC FIRST Power+ Credit Card", "IDFC FIRST Bank", 499.0, 499.0, "Fuel", 0.02, 12000.0, 640,
+             "5% savings as 30 rewards points per Rs. 150 spends on HPCL fuel purchase, 5% savings as 30 Reward points per Rs. 150 spends on groceries and utilities, Uncapped 3 reward points per Rs. 150 on all other eligible spends, Happy Coins via HP Pay App", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/04/hpcl-power-plus.jpg"),
+            ("ICICI HPCL Super Saver Credit Card", "ICICI Bank", 500.0, 500.0, "Fuel", 0.02, 10000.0, 630, "Up to 5% value back on HPCL fuel, 4% cashback on fuel spends at HPCL pumps, 5% back as reward points on grocery, departmental stores and utility bill spends, 2 reward points on every Rs. 100 spent on retail purchases",
+             "#", "https://www.paisabazaar.com/wp-content/webp-express/webp-images/doc-root/wp-content/uploads/2021/12/ICICI-Bank-HPCL-Super-Saver-Credit-Card-300x190.png.webp"),
+            ("IndianOil Axis Bank Credit Card", "Axis Bank", 500.0, 500.0, "Fuel", 0.01, 10000.0, 630,
+             "4% value back on fuel spends at any IOCL outlet, 1% value back on online shopping, EDGE rewards equivalent to 1st fuel spend up to Rs. 250 welcome bonus, Discount on booking movie tickets via BookMyShow, Discount on dining bills at partner restaurants", "#", "https://www.paisabazaar.com/wp-content/uploads/2019/12/Indianoil-Axis.jpg")
+        ]
+        for card_data in cards_to_add:
+            # Use add_card to ensure integrity check and proper insertion
+            add_card(*card_data)
+        print("Dummy data added successfully.")
+    else:
+        print("Database already contains data, skipping dummy data addition.")
+
+
+def get_card_by_name(card_name: str) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM credit_cards WHERE name = ?", (card_name,))
+    card = cursor.fetchone()
+    conn.close()
+    return dict(card) if card else None
+
+
+def update_card(card_id: int, **kwargs: Any) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    set_clauses = []
+    params = []
+    for key, value in kwargs.items():
+        if key in ['name', 'issuer', 'joining_fee', 'annual_fee', 'reward_type', 'reward_rate',
+                   'eligibility_income', 'eligibility_credit_score', 'special_perks',
+                   'affiliate_link', 'image_url']:  # Ensure only valid columns are updated
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+    params.append(card_id)
+
+    if set_clauses:
+        query = f"UPDATE credit_cards SET {', '.join(set_clauses)} WHERE id = ?;"
+        try:
+            cursor.execute(query, params)
+            conn.commit()
+            return "Card updated successfully."
+        except Exception as e:
+            return f"Error updating card: {e}"
+        finally:
+            conn.close()
+    conn.close()
+    return "No valid fields to update."
+
+
+def delete_card(card_id: int) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM credit_cards WHERE id = ?;", (card_id,))
+        conn.commit()
+        return "Card deleted successfully."
+    except Exception as e:
+        return f"Error deleting card: {e}"
+    finally:
+        conn.close()
+
+
+def get_all_cards() -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM credit_cards;")
+    all_cards = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in all_cards]
+
+```
+
+`digest.txt`:
+
+```txt
+Directory structure:
+â””â”€â”€ credit_card_advisor/
+    â”œâ”€â”€ README.md
+    â”œâ”€â”€ agent.py
+    â”œâ”€â”€ Agent_Design.md
+    â”œâ”€â”€ app.py
+    â”œâ”€â”€ database.py
+    â”œâ”€â”€ Dockerfile
+    â”œâ”€â”€ recommender.py
+    â”œâ”€â”€ requirements.txt
+    â”œâ”€â”€ static/
+    â”‚   â”œâ”€â”€ css/
+    â”‚   â”‚   â””â”€â”€ style.css
+    â”‚   â””â”€â”€ js/
+    â”‚       â””â”€â”€ main.js
+    â””â”€â”€ templates/
+        â””â”€â”€ index.html
+
+================================================
+FILE: README.md
+================================================
+Credit Card Advisor
+Project Overview
+This Credit Card Advisor is an AI-powered conversational agent designed to help users find the best-fit credit cards based on their financial profile and spending habits. Built with Flask for the backend and a LangChain agent, it guides users through a series of questions to collect necessary information (monthly income, spending habits, preferred benefits, existing cards, and credit score), and then recommends suitable credit cards from a simulated database.
+
+Features
+Interactive Chat Interface: Users can converse naturally with the AI advisor.
+
+Personalized Recommendations: Provides credit card suggestions tailored to individual financial data.
+
+Detailed Card Information: For each recommended card, it displays the name, an image, key reasons for the recommendation, and a simulated annual reward/saving.
+
+Structured Data Collection: The agent intelligently collects user data step-by-step.
+
+Extensible Backend: Built on Flask and LangChain, allowing for easy expansion of features and integration with more complex tools or external APIs (e.g., real-time credit card data APIs).
+
+Demo
+Experience the live Credit Card Advisor here: https://credit-card-advisor-xvhbgr5zoq-ul.a.run.app
+
+ <https://www.youtube.com/watch?v=pu-LUZE8nW8>
+
+Setup Instructions
+Follow these steps to get the Credit Card Advisor up and running on your local machine.
+
+Prerequisites
+Python 3.9+
+
+pip (Python package installer)
+
+git (for cloning the repository)
+
+Installation
+Clone the Repository:
+
+git clone https://github.com/akhilkarwal161/credit_card_advisor.git
+cd credit_card_advisor
+
+Create and Activate a Virtual Environment:
+It's recommended to use a virtual environment to manage project dependencies.
+
+python3 -m venv venv
+source venv/bin/activate # On macOS/Linux
+# For Windows: .\venv\Scripts\activate
+
+Install Python Dependencies:
+Install all required libraries using pip and the requirements.txt file.
+
+pip install -r requirements.txt
+
+Database Initialization and Population:
+The application uses a SQLite database. This command will create the credit_cards.db file and populate it with initial dummy data.
+
+python -c "from database import init_db, populate_initial_data; init_db(); populate_initial_data()"
+
+(Note: This command clears and repopulates the database. If you have custom data, adjust accordingly.)
+
+### Set up Google Gemini API Key
+The LangChain agent uses the Google Gemini API. To protect your key, you should not hard-code it. Instead, use an environment file.
+
+1.  **Create a `.env` file:** In the root directory of the project, create a new file named `.env` by copying the example file.
+    ```bash
+    cp .env.example .env
+    ```
+
+2.  **Add your API key:** Open the new `.env` file and replace `YOUR_GOOGLE_API_KEY_HERE` with your actual API key obtained from Google.
+
+    ```
+    # .env
+    GOOGLE_API_KEY="your_actual_api_key_from_google"
+    ```
+
+The `.gitignore` file is already configured to ignore `.env`, so you won't accidentally commit your secret key.
+
+### Deployment Note
+When deploying to a service like Google Cloud Run, do not upload your `.env` file. Instead, configure the `GOOGLE_API_KEY` as a secret or environment variable directly in the cloud service's configuration settings. The application is set up to read this variable automatically.
+
+Running the Application
+Start the Flask Backend:
+
+python app.py
+
+The Flask application will start, typically running on http://127.0.0.1:5000/.
+
+Open in Browser:
+Open your web browser and navigate to the address provided by Flask (e.g., http://127.0.0.1:5000/).
+
+You can now interact with the Credit Card Advisor!
+
+## Technologies Used
+Backend: Flask (Python web framework)
+
+AI Agent: LangChain (for building LLM applications)
+
+LLM: Google Gemini 2.0 Flash
+
+Database: SQLite3
+
+Frontend: HTML, JavaScript, Tailwind CSS (for styling)
+
+Dependency Management: pip, requirements.txt
+
+
+================================================
+FILE: agent.py
+================================================
+# agent.py
+import os
+import json
+from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
+from dotenv import load_dotenv
+from langchain_core.tools import Tool
+from langchain_core.prompts import PromptTemplate
+from langchain.agents import AgentExecutor, create_react_agent
+from typing import Optional, List, Dict, Any
+# Keep for internal type checking if needed later
+from pydantic import BaseModel, Field, ValidationError
+# Import database functions and recommender logic
+from database import get_cards_by_criteria
+from recommender import get_card_recommendations  # Import recommender function
+
+# Load environment variables from a .env file if it exists.
+load_dotenv()
+
+# IMPORTANT: Your API key should be set as an environment variable named GOOGLE_API_KEY.
+# You can do this by creating a .env file in the root of your project.
+# DO NOT commit your API key to version control.
+if not os.getenv("GOOGLE_API_KEY"):
+    raise ValueError(
+        "GOOGLE_API_KEY environment variable not set. Please create a .env file or set it manually.")
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+
+# Global placeholder for user data - the agent will update this
+_temp_user_data_storage = {
+    'monthly_income': None,
+    'spending_habits': {},
+    'preferred_benefits': [],
+    'existing_cards': [],
+    'credit_score': None
+}
+
+# --- Pydantic Models for Internal Type Checking (not directly for tool input schema) ---
+class UserUpdateInput(BaseModel):
+    """Internal model for validating updated user data fields."""
+    monthly_income: Optional[float] = Field(
+        None, description="The user's monthly income in INR.")
+    spending_habits: Optional[Dict[str, float]] = Field(
+        None, description="Approximate monthly spending on categories like fuel, travel, groceries, and dining. Format as a dictionary, e.g., {'fuel': 2000, 'groceries': 5000}.")
+    preferred_benefits: Optional[List[str]] = Field(
+        None, description="List of preferred benefits, e.g., ['cashback', 'lounge access']. If user says 'any', provide ['any'].")
+    existing_cards: Optional[List[str]] = Field(
+        None, description="List of existing credit card names, or an empty list if none.")
+    credit_score: Optional[int] = Field(
+        None, description="The user's approximate credit score (numerical value) or None if unknown.")
+
+
+# --- Tool Functions ---
+
+
+def get_credit_cards_tool(data_json_string: str) -> str:
+    """
+    Fetches and processes credit card recommendations based on user's monthly income, credit score,
+    and preferred benefits. It expects a pure JSON string and extracts parameters after parsing.
+    Returns a JSON string of a list of recommended cards, each with name, key reasons, and reward simulation.
+    """
+    print(
+        f"get_credit_cards_tool: Received raw string input: '{data_json_string}'")
+
+    global _temp_user_data_storage  # Access the global storage for full context
+
+    try:
+        # Aggressively strip any surrounding characters including markdown backticks and whitespace
+        cleaned_json_string = data_json_string.strip().strip('`').strip()
+
+        if not cleaned_json_string:
+            raise ValueError("Input string is empty after cleaning.")
+
+        parsed_input_dict = json.loads(cleaned_json_string)
+        print(
+            f"get_credit_cards_tool: Parsed JSON string: {parsed_input_dict}")
+
+        user_income = parsed_input_dict.get('user_income')
+        user_credit_score = parsed_input_dict.get('user_credit_score')
+        preferred_benefits_str = parsed_input_dict.get(
+            'preferred_benefits', "")
+
+        # Basic type checking and error handling for extracted values
+        if not isinstance(user_income, (int, float)):
+            raise ValueError(
+                f"Invalid type for user_income: {type(user_income)}")
+        if not isinstance(user_credit_score, int):
+            raise ValueError(
+                f"Invalid type for user_credit_score: {type(user_credit_score)}")
+        if not isinstance(preferred_benefits_str, str):
+            raise ValueError(
+                f"Invalid type for preferred_benefits: {type(preferred_benefits_str)}")
+
+
+        benefits_list = [b.strip().lower() for b in preferred_benefits_str.split(',')
+                         ] if preferred_benefits_str else []
+
+        if 'any' in benefits_list:  # Handle "any" as a special case for benefits
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, [])
+        else:
+            raw_cards = get_cards_by_criteria(
+                user_income, user_credit_score, benefits_list)
+
+        # Use the recommender to get the final, ranked recommendations
+        final_recommendations = get_card_recommendations(
+            raw_cards, _temp_user_data_storage)
+
+        # Return the recommendations as a JSON string
+        return json.dumps(final_recommendations)
+
+    except json.JSONDecodeError as e:
+        print(f"get_credit_cards_tool: JSONDecodeError: {e}")
+        return f"Error: Invalid JSON format for get_credit_cards_tool. Please ensure your Action Input is a pure JSON object string: {e}"
+    except ValueError as e:
+        print(f"get_credit_cards_tool: ValueError: {e}")
+        return f"Error: Missing or invalid data types for get_credit_cards_tool: {e}"
+    except Exception as e:
+        print(f"get_credit_cards_tool: General Error: {e}")
+        return f"Error fetching credit card recommendations: {e}"
+
+
+# Expects a single string argument
+def update_user_data_tool_func(data_json_string: str) -> str:
+    """
+    Updates the global user data dictionary with provided information.
+    It expects a pure JSON string and updates the storage after parsing.
+    """
+    global _temp_user_data_storage
+
+    print(
+        f"update_user_data_tool_func: Received raw string input: '{data_json_string}'")
+
+    try:
+        # Aggressively strip any surrounding characters including markdown backticks and whitespace
+        cleaned_json_string = data_json_string.strip().strip('`').strip()
+
+        if not cleaned_json_string:
+            raise ValueError("Input string is empty after cleaning.")
+
+        parsed_input_dict = json.loads(cleaned_json_string)
+        print(
+            f"update_user_data_tool_func: Parsed JSON string: {parsed_input_dict}")
+
+        # Manually update _temp_user_data_storage with type checking, no explicit conversions unless necessary
+        if 'monthly_income' in parsed_input_dict and isinstance(parsed_input_dict['monthly_income'], (int, float)):
+            _temp_user_data_storage['monthly_income'] = parsed_input_dict['monthly_income']
+        elif 'monthly_income' in parsed_input_dict and parsed_input_dict['monthly_income'] is not None:
+            # If it's a string, try converting to float, otherwise warn
+            try:
+                _temp_user_data_storage['monthly_income'] = float(
+                    parsed_input_dict['monthly_income'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert monthly_income to float: {parsed_input_dict['monthly_income']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['monthly_income'] = None
+
+        if 'spending_habits' in parsed_input_dict and isinstance(parsed_input_dict['spending_habits'], dict):
+            _temp_user_data_storage['spending_habits'] = parsed_input_dict['spending_habits']
+        elif 'spending_habits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for spending_habits: {parsed_input_dict['spending_habits']}")
+
+        if 'preferred_benefits' in parsed_input_dict and isinstance(parsed_input_dict['preferred_benefits'], list):
+            _temp_user_data_storage['preferred_benefits'] = parsed_input_dict['preferred_benefits']
+        elif 'preferred_benefits' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for preferred_benefits: {parsed_input_dict['preferred_benefits']}")
+
+        if 'existing_cards' in parsed_input_dict and isinstance(parsed_input_dict['existing_cards'], list):
+            _temp_user_data_storage['existing_cards'] = parsed_input_dict['existing_cards']
+        elif 'existing_cards' in parsed_input_dict:
+            print(
+                f"Warning: Invalid type for existing_cards: {parsed_input_dict['existing_cards']}")
+
+        if 'credit_score' in parsed_input_dict and isinstance(parsed_input_dict['credit_score'], int):
+            _temp_user_data_storage['credit_score'] = parsed_input_dict['credit_score']
+        elif 'credit_score' in parsed_input_dict and parsed_input_dict['credit_score'] is not None:
+            # If it's a float, try converting to int, otherwise warn
+            try:
+                _temp_user_data_storage['credit_score'] = int(
+                    parsed_input_dict['credit_score'])
+            except ValueError:
+                print(
+                    f"Warning: Could not convert credit_score to int: {parsed_input_dict['credit_score']}")
+                # Reset or handle appropriately
+                _temp_user_data_storage['credit_score'] = None
+
+        print(
+            f"update_user_data_tool_func: Current _temp_user_data_storage after merge: {_temp_user_data_storage}")
+        return "User data updated successfully."
+    except json.JSONDecodeError as e:
+        print(f"update_user_data_tool_func: JSONDecodeError: {e}")
+        return f"Error: Invalid JSON format for data update. Please ensure your Action Input is a pure JSON object string: {e}"
+    except Exception as e:
+        print(f"update_user_data_tool_func: General Error during update: {e}")
+        return f"Error updating user data: {e}"
+
+
+# List of tools available to the LangChain agent.
+tools = [
+    Tool(
+        name="get_credit_cards_tool",
+        func=get_credit_cards_tool,
+        # Removed args_schema for get_credit_cards_tool to manually parse input
+        description="Useful for fetching and processing credit card recommendations. The Action Input MUST be a pure JSON string (e.g., '{\"user_income\": 50000.0, \"user_credit_score\": 750, \"preferred_benefits\": \"cashback\"}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'user_income' (float), 'user_credit_score' (int), and 'preferred_benefits' (optional, comma-separated string)."
+    ),
+    Tool(
+        name="update_user_data_tool",
+        func=update_user_data_tool_func,
+        # args_schema is removed here, as the function now expects a single raw string
+        description="Call this tool to update the user's collected data. The Action Input MUST be a pure JSON string (e.g., '{\"monthly_income\": 50000.0}'). Do NOT include any markdown formatting like triple backticks (`). Fields: 'monthly_income' (float), 'spending_habits' (dict), 'preferred_benefits' (list of strings), 'existing_cards' (list of strings), or 'credit_score' (int)."
+    ),
+]
+
+# Prompt template string - DEFINED HERE (moved for correct order)
+_prompt_template_string = """
+You are a super friendly and incredibly helpful credit card advisor! Your main goal is to make finding the perfect credit card an absolute breeze for users, all through a warm, clear, and genuinely empathetic conversation. Let's make this a delightful experience!
+
+To help users find their ideal card, we need a little bit of information from them. We'll go through it **step-by-step, one question at a time**, so it's nice and easy. And don't worry, I'll always acknowledge your input with a friendly remark before moving on to the next exciting detail!
+
+Here's the essential info we'll gather, in a friendly flow:
+
+1.  **Your Monthly Income (in INR):**
+    * **How to ask:** Let's start with your approximate monthly income in Indian Rupees. What's that figure looking like for you? Feel free to ask this in a few different, inviting ways!
+    * **Expected input:** Just a numerical value, please! Ã°Å¸ËœÅ 
+
+2.  **Your Spending Habits:**
+    * **How to ask:** Wonderful! With your income noted, let's explore your monthly spending a bit. Could you share your approximate monthly spends on categories like fuel, travel, groceries, and dining? A simple "category: amount" format works perfectly (e.g., 'fuel: 2000, groceries: 5000'). This helps us understand your lifestyle better!
+    * **Expected input:** A lovely list of categories and their approximate amounts.
+
+3.  **Your Preferred Benefits:**
+    * **How to ask:** Fantastic, almost there! Now, what kind of benefits really excite you in a credit card? Are you dreaming of cashback, accumulating travel points, enjoying lounge access, or something else? Just let me know your top preferences, separated by commas! If you're open to anything, simply say 'any'!
+    * **Expected input:** A comma-separated list of benefits, or the word 'any'.
+
+4.  **Your Existing Cards (Optional):**
+    * **How to ask:** Just one more quick question about your current cards, if any! Do you happen to hold any existing credit cards right now? If not, no worries at all, just say 'no'!
+    * **Expected input:** A list of card names, or 'no'.
+
+5.  **Your Approximate Credit Score:**
+    * **How to ask:** Last but not least, your approximate credit score! This helps us find cards you're more likely to qualify for. What's that number looking like for you (e.g., 750)? If you're unsure, it's totally fine to say 'unknown'!
+    * **Expected input:** A numerical value or 'unknown'.
+
+**Ã¢Å“Â¨ CRITICAL BEHAVIOR GUIDELINES FOR ME (Your Friendly Advisor)! Ã¢Å“Â¨**
+
+* **A. Information Gathering is a Breeze:** I *promise* to go through our list and ask for only **one piece of information at a time**. No overwhelming you with multiple questions at once! My tone will always be super polite and helpful.
+* **B. Data Storage is My Secret Power:** As soon as I lovingly understand each piece of information you share, I'll *immediately* use my `update_user_data_tool` to securely store it. Remember, the input to this tool MUST be a pure JSON object string, without any pesky markdown (like triple backticks) or extra text. I'm a stickler for clean data!
+    * Example for income: `Action Input: {{"monthly_income": 50000.0}}`
+    * Example for spending: `Action Input: {{"spending_habits": {{"fuel": 2000.0, "groceries": 5000.0}}}}`
+    * Example for benefits: `Action Input: {{"preferred_benefits": ["cashback", "lounge access"]}}`
+    * Example for existing cards: `Action Input: {{"existing_cards": []}}`
+    * Example for credit score: `Action Input: {{"credit_score": 750}}`
+* **C. Your Conversational Experience Matters:** When I need to ask a follow-up question or share a little thought *before* our grand reveal of card recommendations, I'll always present my response in a clear `Final Answer` block, always starting with a thoughtful `Thought:`.
+* **D. I Keep Track for You:** The `current_user_data` is my handy little notepad! I'll always peek at this to see what info we've gathered so far, so I know exactly what to ask next or when it's time for the big recommendations! I'll parse it as a JSON object in my `Thought:` process.
+
+Here is the current state of collected user data (my notepad!): {current_user_data}
+
+Once we have gathered ALL these wonderful pieces of information and I've securely stored them, I'll excitedly call upon the `get_credit_cards_tool`. When I do this, I'll make sure to pull your `user_income`, `user_credit_score`, and `preferred_benefits` directly from my notepad (`current_user_data`).
+
+Finally, get ready for the grand reveal! I'll present your personalized credit card recommendations. For each fantastic card, I'll highlight:
+* Its fabulous Name!
+* The super-duper Key Reasons why it's a great fit for you!
+* A fun Reward Simulation (like, "You could potentially save/earn up to Rs. 8,000/year cashback!")
+
+TOOLS:
+------
+You have access to the following tools (my little helpers!):
+{tools}
+
+To use a tool, I'll think very carefully and use this precise format:
+
+```
+Thought: [My thoughtful internal reasoning for what to do next to gather information or process it. I'll always be thinking about making your experience great!]
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action (MUST be a pure JSON string, with no surrounding markdown or extra text. Example: {{"monthly_income": 50000.0}} or {{}} for tools with no input)
+Observation: the result of the action (what my helper tool tells me!)
+```
+
+When I've gathered ALL the necessary user information AND my helpful `get_credit_cards_tool` has done its magic, I'll use this special format for your grand final response:
+
+```
+Thought: I have successfully gathered all the wonderful user information and stored it. Now, it's time to gather the perfect recommendations! I'll thoughtfully extract the necessary data from my notepad ('current_user_data') and call the get_credit_cards_tool to fetch those amazing recommendations for you.
+Action: get_credit_cards_tool
+Action Input: {{"user_income": <EXTRACT_INCOME_FROM_CURRENT_USER_DATA>, "user_credit_score": <EXTRACT_CREDIT_SCORE_FROM_CURRENT_USER_DATA>, "preferred_benefits": "<EXTRACT_COMMA_SEPARATED_BENEFITS_FROM_CURRENT_USER_DATA>"}}
+Observation: [string representation of final processed recommendations]
+Thought: Hooray! I've received your fantastic credit card recommendations! I'm so excited to present them to you in a clear, friendly, and easy-to-understand format.
+Final Answer: Great news! Based on the wonderful information you've shared with me, here are some top credit card recommendations that might be an absolutely perfect fit for you! I'm thrilled to help you explore these options: [YOUR JSON ARRAY OF CARD RECOMMENDATIONS HERE]
+```
+
+When I need to ask you a follow-up question or gently acknowledge your input, I'll use this format:
+
+```
+Thought: [My internal reasoning for the next delightful question or warm acknowledgement. Always thinking about our friendly conversation!]
+Final Answer: [My polite, warm, and interactive question or acknowledgement to you!]
+```
+
+Let's begin our friendly chat!
+
+User Input: {input}
+Chat History: {chat_history}
+{agent_scratchpad}
+"""
+
+prompt = PromptTemplate.from_template(_prompt_template_string)
+
+# Create the LangChain agent using the ReAct (Reasoning and Acting) framework.
+agent = create_react_agent(llm, tools, prompt)
+
+# Create an AgentExecutor to run the agent.
+agent_executor = AgentExecutor(
+    agent=agent, tools=tools, verbose=True, handle_parsing_errors=True
+)
+
+
+def get_agent_executor():
+    """Returns the initialized agent executor."""
+    return agent_executor
+
+
+def get_temp_user_data_storage():
+    """Returns the temporary user data storage dictionary."""
+    return _temp_user_data_storage
+
+
+def clear_temp_user_data_storage():
+    """Clears the temporary user data storage."""
+    global _temp_user_data_storage
+    _temp_user_data_storage = {
+        'monthly_income': None,
+        'spending_habits': {},
+        'preferred_benefits': [],
+        'existing_cards': [],
+        'credit_score': None
+    }
+    return _temp_user_data_storage
+
+
+
+================================================
+FILE: Agent_Design.md
+================================================
+Agent Flow and Prompt Design Documentation
+This document provides detailed insights into the design and functionality of the LangChain agent powering the Credit Card Advisor application.
+
+1. Overall Architecture
+The Credit Card Advisor leverages a Flask backend to serve a web interface and interact with a LangChain agent. This agent acts as the brain of the application, orchestrating calls to various tools to gather information and provide personalized credit card recommendations.
+
+Data Flow Diagram (Conceptual):
+
+User Input (Browser)
+       |
+       v
+Flask Backend (app.py)
+       | (POST /chat)
+       v
+LangChain AgentExecutor (agent.py)
+       |
+       v
+   [ Tools ]
+   /       \
+  v         v
+update_user_data_tool  get_credit_cards_tool
+   |          |
+   v          v
+Internal User Data  Database (database.py)
+     &          |
+  (recommender.py)
+       ^
+       | (Structured JSON)
+       |
+LangChain AgentExecutor
+       | (Final Answer: Conversational + Structured JSON)
+       v
+Flask Backend
+       | (JSON response: {response: "...", recommendations: [...]})
+       v
+Browser (index.html)
+       |
+       v
+User Output (Chat bubble + Card display)
+
+2. Agent Flow
+The LangChain agent follows a strict, multi-turn conversational flow to gather all necessary user information before providing recommendations.
+
+2.1. Initialization (agent.py)
+The ChatGoogleGenerativeAI model (gemini-2.0-flash) is initialized as the underlying Large Language Model.
+
+Two custom tools are defined:
+
+update_user_data_tool: Manages the collection and storage of user-provided data in a global _temp_user_data_storage dictionary.
+
+get_credit_cards_tool: Fetches and processes credit card recommendations based on user's monthly income, credit score, and preferred benefits. It expects a pure JSON string and extracts parameters after parsing.
+Returns a JSON string of a list of recommended cards, each with name, key reasons, and reward simulation.
+
+An AgentExecutor is created with a create_react_agent strategy, enabling the agent to reason and act (ReAct framework).
+
+2.2. Information Gathering Steps (Sequential)
+The agent is explicitly prompted to collect information one piece at a time, in a specific order:
+
+Monthly Income (INR): Asks for a numerical value.
+
+Spending Habits: Requests approximate monthly spending in categories like fuel, travel, groceries, and dining (e.g., "category: amount").
+
+Preferred Benefits: Inquires about desired benefits (e.g., cashback, travel points, lounge access) as a comma-separated list. Handles "any" as a special case.
+
+Existing Cards (Optional): Asks if the user has existing cards and expects a list of names or "no".
+
+Approximate Credit Score: Asks for a numerical value (e.g., 750) or allows "unknown."
+
+2.3. Tool Usage
+The agent's decision-making process (Thought and Action) is governed by its prompt and the available tools.
+
+update_user_data_tool
+Purpose: To store validated pieces of user data (monthly_income, spending_habits, preferred_benefits, existing_cards, credit_score) as they are collected.
+
+Input: Expects a pure JSON string (e.g., {"monthly_income": 50000.0}). It does not use args_schema directly in Tool definition; instead, the update_user_data_tool_func internally parses this string and performs type checking. This makes it robust to minor formatting variations from the LLM.
+
+Output: Returns a simple string message indicating "User data updated successfully."
+
+get_credit_cards_tool
+Purpose: To retrieve, process, and rank credit card recommendations once all necessary user data has been collected.
+
+Input: Expects a pure JSON string (e.g., {"user_income": 50000.0, "user_credit_score": 750, "preferred_benefits": "cashback, lounge access"}). Similar to update_user_data_tool, its function get_credit_cards_tool handles internal parsing and extraction from this string.
+
+Output: Returns a JSON string representing a list of recommended card dictionaries, each containing card_name, image_url, key_reasons, reward_simulation, net_benefit, and affiliate_link.
+
+3. Recommendation Logic (recommender.py)
+The recommender.py module takes the raw card data (filtered by database.py based on basic eligibility) and the collected user_data to generate personalized recommendations.
+
+get_card_recommendations(raw_cards: list[dict], user_data: dict) -> list[dict]:
+
+Input:
+
+raw_cards: List of dictionaries representing credit cards from the database. Crucially, database.py is configured to return sqlite3.Row objects that behave like dictionaries, ensuring recommender.py receives dictionary-like data.
+
+user_data: The _temp_user_data_storage dictionary containing all collected user information.
+
+Core Logic:
+
+Total Spending Calculation: Sums up monthly spending from user_data['spending_habits'].
+
+Base Reward Calculation: Estimates annual rewards based on card['reward_type'] (e.g., cashback, travel points, rewards, co-branded, fuel). It applies different multipliers or specific logic for each type.
+
+Special Perks Matching: Iterates through card['special_perks'] and user_data['preferred_benefits'] to identify additional reasons for recommendation (e.g., lounge access, dining benefits).
+
+Reason Generation: Constructs key_reasons strings based on the calculations and perk matches. Reasons are deduplicated.
+
+Net Annual Benefit: Calculates estimated_annual_rewards - (joining_fee + annual_fee).
+
+Filtering: Only cards with a positive net benefit or low fees (<= Rs. 750) are considered.
+
+Deduplication & Ranking: Unique cards are maintained (highest net_benefit for duplicates), and the top 5 are sorted by net_benefit in descending order.
+
+Output: A list of dictionaries, each formatted with card_name, image_url, key_reasons, reward_simulation, net_benefit, and affiliate_link. This structured output is critical for the frontend display.
+
+4. Prompt Design (_prompt_template_string in agent.py)
+The prompt is meticulously crafted to guide the LLM's behavior and ensure consistent output, especially for tool usage and final recommendations. It has been significantly enhanced to foster a super friendly and incredibly helpful conversational tone.
+
+Persona & Goal: Clearly defines the agent as "a super friendly and incredibly helpful credit card advisor!" whose main goal is to "make finding the perfect credit card an absolute breeze for users, all through a warm, clear, and genuinely empathetic conversation." This sets a strong expectation for the LLM's friendly tone.
+
+Sequential Information Collection (Friendly Flow):
+
+Emphasizes collecting information "step-by-step, one question at a time," making it "nice and easy."
+
+Explicitly states, "I'll always acknowledge your input with a friendly remark before moving on to the next exciting detail!"
+
+Each information point (Income, Spending Habits, Preferred Benefits, Existing Cards, Credit Score) now includes a "How to ask" section with suggestions for varied, inviting, and empathetic phrasing (e.g., "What's that figure looking like for you?," "This helps us understand your lifestyle better!").
+
+Includes friendly emojis (e.g., "Ã°Å¸ËœÅ ") in expected input descriptions.
+
+CRITICAL BEHAVIOR GUIDELINES (Friendly Advisor Tone):
+
+A. Information Gathering is a Breeze: Reassures the user that the agent "promise[s] to go through our list and ask for only one piece of information at a time."
+
+B. Data Storage is My Secret Power: Describes data storage as "lovingly understand[ing]" and "securely stor[ing]" information, with an emphasis on "pure JSON object string" for tool inputs, framed as being a "stickler for clean data!"
+
+C. Your Conversational Experience Matters: Reinforces the commitment to clear Final Answer blocks with thoughtful Thought: prefixes.
+
+D. I Keep Track for You: Explains current_user_data as a "handy little notepad" that the agent "always peek[s] at" for a smooth flow.
+
+Tool Usage Format: Provides a precise Thought, Action, Action Input, Observation structure, with the Thought: now including phrases like "My thoughtful internal reasoning for what to do next... I'll always be thinking about making your experience great!"
+
+Final Recommendation Format:
+
+The Thought: before calling get_credit_cards_tool is more enthusiastic: "Now, it's time to gather the perfect recommendations! I'll thoughtfully extract the necessary data..."
+
+The Final Answer is highly welcoming and positive: "Great news! Based on the wonderful information you've shared with me, here are some top credit card recommendations that might be an absolutely perfect fit for you! I'm thrilled to help you explore these options:"
+
+Follow-up/Acknowledgement Format: Explicitly guides the LLM to provide "polite, warm, and interactive question[s] or acknowledgement[s]."
+
+Iterative Refinement of Prompt and Tool Handling
+The current prompt and tool handling strategy (especially for update_user_data_tool and get_credit_cards_tool accepting a raw JSON string) is a result of iterative refinement to address common challenges with LLM-tool interaction, such as:
+
+Markdown Wrapping: LLMs often wrap JSON in triple backticks, which needs to be stripped.
+
+Inconsistent JSON Formatting: Variations in whitespace or minor malformations.
+
+LLM Hallucinating Arguments: Ensuring the LLM provides arguments in the expected single JSON string format.
+
+Preventing Multi-Question Turns: The "strictly one by one" instruction helps enforce this.
+
+By clearly defining the expected input and output formats at both the tool definition and prompt level, and by heavily emphasizing a friendly tone and interactive conversational patterns, we aim to minimize parsing errors and ensure a delightful user experience.
+
+
+================================================
+FILE: app.py
+================================================
+# app.py
+from flask import Flask, render_template, request, jsonify
+import json
+import re  # Import the regex module
+import os  # Import os to access environment variables
+
+# Import only what's necessary from agent.py: the agent executor object and the clear function
+from agent import get_agent_executor, clear_temp_user_data_storage, get_temp_user_data_storage
+from database import init_db, populate_initial_data, clear_duplicate_cards
+
+app = Flask(__name__)
+
+# Initialize the LangChain agent executor once when the app starts
+agent_executor = get_agent_executor()
+
+# --- Session Management for Chat History ---
+user_sessions = {}  # This will manage chat history per session.
+
+
+@app.route('/')
+def index():
+    """Renders the main HTML page for the chat interface."""
+    return render_template('index.html')
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """
+    Handles chat messages from the frontend, feeding them to the LangChain agent
+    for dynamic conversation and recommendations.
+    """
+    if not request.is_json:
+        print("Warning: Incoming request is not JSON or has incorrect Content-Type.")
+        return jsonify({"response": "Invalid request: Expected JSON content.", "recommendations": []}), 400
+
+    request_data = request.json
+    user_message = request_data.get('message', '') if request_data else ''
+    session_id = request_data.get(
+        'session_id', 'default_session') if request_data else 'default_session'
+
+    # Initialize session data if it does not exist
+    if session_id not in user_sessions:
+        user_sessions[session_id] = {
+            'chat_history': [],  # Stores messages for the LangChain agent's context
+        }
+        # For simplicity in this demo, we'll clear the global temp storage on a new "session".
+        # In a multi-user app, you'd manage per-session state more robustly (e.g., in a database).
+        clear_temp_user_data_storage()
+
+    session_data = user_sessions[session_id]
+    chat_history = session_data['chat_history']
+
+    response_text = ""
+    # This will be populated if the agent's output contains structured recommendations
+    recommendations = []
+
+    # Retrieve the current state of user data to pass to the agent (for agent's internal awareness)
+    current_user_data = get_temp_user_data_storage()
+
+    # Prepare input for the agent
+    agent_input = {
+        "input": user_message,
+        "chat_history": chat_history,
+        # Pass as JSON string
+        "current_user_data": json.dumps(current_user_data)
+    }
+
+    try:
+        # Invoke the LangChain agent to get a response
+        agent_response = agent_executor.invoke(agent_input)
+        raw_agent_output = agent_response.get(
+            'output', "I'm sorry, I couldn't process that.")
+
+        # Default conversational response if no structured recommendations are found/extracted
+        response_text = raw_agent_output
+
+        # --- Extract structured recommendations from agent's response if available ---
+        # Use regex to find a JSON array pattern (starting with '[' and ending with ']')
+        json_match = re.search(r'\[.*\]', raw_agent_output, re.DOTALL)
+
+        if json_match:
+            json_str = json_match.group(0)  # Get the matched JSON string
+            try:
+                parsed_recommendations = json.loads(json_str)
+                if isinstance(parsed_recommendations, list):
+                    recommendations = parsed_recommendations
+
+                    # Set a generic conversational intro for the chat window
+                    response_text = "Here are some credit card recommendations based on your preferences:"
+
+                    # Optionally, you could also remove the JSON part from raw_agent_output
+                    # if you wanted to display any non-JSON text the agent provided.
+                    # For now, we prioritize the clean intro + structured recommendations.
+
+            except json.JSONDecodeError as e:
+                print(
+                    f"Warning: Regex found potential JSON, but JSONDecodeError occurred: {json_str[:100]}... Error: {e}")
+                # If parsing fails, the original raw_agent_output remains in response_text
+            except Exception as parse_e:
+                print(
+                    f"Warning: General error parsing potential JSON from agent's recommendations: {parse_e}")
+                # If any other parsing error occurs, keep the original response_text
+
+    except Exception as e:
+        print(f"Error invoking agent: {e}")
+        response_text = "I apologize, I encountered an internal error. Could you please rephrase or try again?"
+        # Clear recommendations on agent invocation error
+        recommendations = []
+
+    # Update chat history with the user's message and agent's response
+    # The 'response_text' here should only be the conversational part
+    chat_history.append({"role": "user", "content": user_message})
+    chat_history.append({"role": "assistant", "content": response_text})
+
+    return jsonify({"response": response_text, "recommendations": recommendations})
+
+
+if __name__ == '__main__':
+    # Initialize the SQLite database (creates the file and table if they don't exist).
+    init_db()
+
+    # Clear any duplicate entries before populating
+    clear_duplicate_cards()
+
+    # Populate the database with initial dummy data
+    populate_initial_data()
+
+    # Get the port from environment variable, default to 8080 if not set (Cloud Run will set this)
+    port = int(os.environ.get('PORT', 8080))
+    # Listen on all interfaces and dynamic port
+    app.run(host='0.0.0.0', port=port, debug=True)
+
+
+
+================================================
+FILE: database.py
+================================================
+# database.py
+import sqlite3
+import json  # Used for storing spending_habits as JSON string if needed, or just for string representation
+from typing import Optional, List, Dict, Any
+
+DATABASE_NAME = 'credit_cards.db'
+
+
+def get_db_connection():
+    """Establishes a connection to the SQLite database and sets row_factory to sqlite3.Row."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    # Set row_factory to sqlite3.Row to allow accessing columns by name (like a dictionary)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initializes the SQLite database and creates the credit_cards table if it doesn't exist."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS credit_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            issuer TEXT NOT NULL,
+            joining_fee REAL NOT NULL,
+            annual_fee REAL NOT NULL,
+            reward_type TEXT NOT NULL,
+            reward_rate REAL NOT NULL,
+            eligibility_income REAL NOT NULL,
+            eligibility_credit_score INTEGER NOT NULL,
+            special_perks TEXT,
+            affiliate_link TEXT,
+            image_url TEXT,
+            UNIQUE(name, issuer) ON CONFLICT IGNORE
+        );
+    ''')
+    conn.commit()
+    conn.close()
+    print("Database initialized successfully.")
+
+
+def add_card(
+    name: str, issuer: str, joining_fee: float, annual_fee: float, reward_type: str, reward_rate: float,
+    eligibility_income: float, eligibility_credit_score: int, special_perks: Optional[str],
+    affiliate_link: Optional[str], image_url: Optional[str]
+) -> str:
+    """Inserts a new credit card into the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO credit_cards (
+                name, issuer, joining_fee, annual_fee, reward_type, reward_rate,
+                eligibility_income, eligibility_credit_score, special_perks,
+                affiliate_link, image_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            name, issuer, joining_fee, annual_fee, reward_type, reward_rate,
+            eligibility_income, eligibility_credit_score, special_perks,
+            affiliate_link, image_url
+        ))
+        conn.commit()
+        return f"Card '{name}' from '{issuer}' added successfully."
+    except sqlite3.IntegrityError:
+        return f"Error: A card with the name '{name}' and issuer '{issuer}' already exists. Skipping."
+    except Exception as e:
+        return f"Error adding card: {e}"
+    finally:
+        conn.close()
+
+
+def get_cards_by_criteria(user_income: float, user_credit_score: int, preferred_benefits_list: Optional[List[str]]) -> List[Dict[str, Any]]:
+    """
+    Retrieves credit cards from the database based on income, credit score, and preferred benefits.
+    If preferred_benefits_list is empty or contains "any", it returns all cards matching income and credit score.
+    Returns a list of dictionaries, where each dictionary represents a card.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM credit_cards WHERE eligibility_income <= ? AND eligibility_credit_score <= ?"
+    params = [user_income, user_credit_score]
+
+    if preferred_benefits_list and "any" not in [b.lower() for b in preferred_benefits_list]:
+        # Build dynamic WHERE clause for benefits
+        benefit_conditions = []
+        for benefit in preferred_benefits_list:
+            # Search for benefit in special_perks or reward_type (case-insensitive)
+            benefit_conditions.append(
+                "(LOWER(special_perks) LIKE LOWER(?) OR LOWER(reward_type) LIKE LOWER(?))")
+            params.extend([f"%{benefit}%", f"%{benefit}%"])
+
+        # Use 'AND' to combine criteria, and 'OR' for multiple benefits
+        query += " AND (" + " OR ".join(benefit_conditions) + ")"
+
+    # Order by eligibility for more accessible cards first, then by potential reward rate
+    query += " ORDER BY eligibility_income ASC, eligibility_credit_score ASC, reward_rate DESC"
+
+    cursor.execute(query, params)
+    raw_cards_rows = cursor.fetchall()
+    conn.close()
+
+    # Convert sqlite3.Row objects to standard Python dictionaries
+    return [dict(row) for row in raw_cards_rows]
+
+
+def clear_duplicate_cards():
+    """
+    Removes duplicate credit card entries from the database, keeping one instance.
+    Duplicates are identified by matching 'name' and 'issuer'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Create a temporary table with unique rows
+        cursor.execute('''
+            CREATE TEMPORARY TABLE IF NOT EXISTS temp_credit_cards AS
+            SELECT * FROM credit_cards GROUP BY name, issuer;
+        ''')
+
+        # Clear the original table
+        cursor.execute('DELETE FROM credit_cards;')
+
+        # Insert unique rows back into the original table
+        cursor.execute(
+            'INSERT INTO credit_cards SELECT * FROM temp_credit_cards;')
+
+        # Drop the temporary table
+        cursor.execute('DROP TABLE temp_credit_cards;')
+
+        conn.commit()
+        print("Duplicate entries removed from the database.")
+    except Exception as e:
+        print(f"Error clearing duplicate cards: {e}")
+    finally:
+        conn.close()
+
+
+def populate_initial_data():
+    """
+    Populates the database with initial dummy credit card data if the database is empty.
+    This prevents re-adding data on every run after the initial setup.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM credit_cards")
+    count = cursor.fetchone()[0]
+    conn.close()  # Close connection after count
+
+    if count == 0:
+        print("Adding dummy data...")
+        cards_to_add = [
+            ("HDFC Diners Club Black Metal Edition Credit Card", "HDFC Bank", 10000.0, 10000.0, "Travel Points", 0.0333, 60000.0, 750,
+             "Unlimited airport lounge access (primary & add-on), High base rewards rate, 10X reward points on SmartBuy, 2X on weekend dining, 1:1 redemption, Club Marriott, Amazon, Swiggy One annual memberships, Low forex markup fee 2%, 10000 RP on Rs. 4 lakh spend per quarter, 6 complimentary golf games per quarter", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/04/HDFC-Diners-Club-Black-Credit-Card.png"),
+            ("Axis Bank Reserve Credit Card", "Axis Bank", 50000.0, 50000.0, "Travel Points", 0.04, 70000.0, 760,
+             "Unlimited domestic & international lounge visits via Priority Pass, Low forex mark-up fee 1.5%, 2X reward points on international spends, Up to 30 EDGE reward points for every Rs. 200 spent, B1G1 BookMyShow tickets, ITC Culinaire, Accorplus, Club Marriott & EazyDiner Prime memberships, 50 free golf rounds/year", "#", "https://www.paisabazaar.com/wp-content/uploads/2022/03/Axis-Reserve-Credit-Card.png"),
+            ("Axis Atlas Credit Card", "Axis Bank", 5000.0, 5000.0, "Travel Points", 0.05, 35000.0, 700,
+             "2.5X EDGE Miles on Travel, Up to 12 international and 18 domestic lounge access per year, Up to 2,500 bonus EDGE Miles as welcome benefit, Up to 5 EDGE Miles per Rs. 100 spent on travel, Redeem EDGE Miles at value of 1 EDGE Mile = 2 Partner Points, Milestone benefits up to 5,000 EDGE Miles", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/02/Axis-Atlas-1-300x190.png"),
+            ("HDFC Regalia Gold Credit Card", "HDFC Bank", 2500.0, 2500.0, "Rewards", 0.0267, 30000.0, 710, "5X reward points on Nykaa, Myntra, Marks & Spencer and Reliance Digital, 4 reward points per Rs. 150 across all retail spends, Complimentary Swiggy One & MMT Black Elite Memberships, Gift voucher Rs. 2,500 on joining fee payment, 6 complimentary international lounge visits, 12 complimentary domestic airport lounge visits per year, Marks & Spencer/ Reliance Digital/ Myntra/ Marriott vouchers on quarterly spends, Flight vouchers on annual spends", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/03/HDFC-Regalia-Gold-Credit-Card.png"),
+            ("YES Bank Paisabazaar PaisaSave Credit Card", "YES Bank", 0.0, 499.0, "Cashback", 0.015, 15000.0, 650, "3% Cashback Points on e-commerce spends (max 5,000 points/month), Unlimited 1.5% Cashback Points on all other spends, including UPI, Redeemable as statement credit 1:1, Renewal fee waived on Rs. 1.2 lakh annual spends, 1% fuel surcharge waiver",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/08/YES-Bank-Paisabazaar-PaisaSave-Credit-Card.png"),
+            ("Cashback SBI Card", "SBI Card", 999.0, 999.0, "Cashback", 0.01, 20000.0, 670, "5% cashback on all online spends (no merchant restriction), 1% cashback across all offline spends, Cashback up to Rs. 5,000 per month, Renewal fee reversed on Rs. 2 lakh annual spend, 1% fuel surcharge waiver",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/04/Cashback-SBI-Card.png"),
+            ("HSBC TravelOne Credit Card", "HSBC", 4999.0, 4999.0, "Travel Points", 0.02, 30000.0, 700, "2x rewards on all travel bookings, Up to 20% off on Zomato, Yatra, EaseMyTrip, Cashback Rs. 1,000, Postcard Hotels voucher Rs. 3,000, 3 months EazyDiner Prime, 4 reward points on every Rs. 100 spent on flights/travel aggregators/foreign currency, 2 reward points on every Rs. 100 other categories, 1 reward point = 1 Air Mile or Hotel Point, 10,000 bonus RP on Rs. 12 lakh annual spend, 6 domestic and 4 international airport lounge access, 4 rounds and 12 golf lessons/year, Up to 20% off duty-free shopping via AdaniOne", "#", "https://www.paisabazaar.com/wp-content/uploads/2025/01/HSBC-TravelOne-Credit-Card.png"),
+            ("Axis Bank SELECT Credit Card", "Axis Bank", 3000.0, 3000.0, "Rewards", 0.05, 28000.0, 690, "2X EDGE Reward Points across all retail transactions, 10,000 EDGE Reward Points welcome benefit, Flat Rs. 500 off per month on BigBasket, Rs. 200 off on Swiggy twice a month, Up to 12 complimentary international lounge visits, 2 domestic lounge visits per quarter, Up to 12 complimentary golf rounds",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2015/11/Axis-Bank-Select-Credit-Card.png"),
+            ("Tata Neu Infinity HDFC Bank Credit Card", "HDFC Bank", 1499.0, 1499.0, "Co-branded", 0.015, 22000.0, 680,
+             "Up to 10% value-back on Tata Neu spends, 8 domestic and 4 international Priority Pass lounge access per year, 5% NeuCoins on all non-EMI spends at Tata Neu & its partner brands, Additional 5% NeuCoins on select spends, 1.5% NeuCoins on UPI/non-Tata/merchant EMI, 1,499 NeuCoins after first spend, Low forex markup fee 2%", "#", "https://www.paisabazaar.com/wp-content/uploads/2017/10/Tata-Neu-Infinity-HDFC-Bank-Credit-Card.png"),
+            ("IndianOil RBL Bank XTRA Credit Card", "RBL Bank", 1500.0, 1500.0, "Fuel", 0.075, 15000.0, 660, "Up to 8.5% savings on IOCL fuel spends, 1,000 Fuel Points on reaching Rs. 75,000 quarterly spends, 15 Fuel Points per Rs. 100 on IOCL fuel, 1% fuel surcharge waiver (Rs. 500-4000), 2 Fuel Points per Rs. 100 other categories, 1 Fuel Point = Rs. 0.50 for IOCL fuel, 3,000 Fuel Points welcome benefit, Annual Fee waived on Rs. 2.75 lakh annual spends",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/08/IndianOil-RBL-Bank-Credit-Cards.webp"),
+            ("SBI Prime Credit Card", "SBI Card", 2999.0, 2999.0, "Rewards", 0.02, 25000.0, 700, "10 reward points per Rs. 100 on dining, groceries, movies and departmental stores, E-gift vouchers worth Rs. 3,000 welcome benefit, Complimentary Club Vistara membership, Complimentary international and domestic lounge access",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/01/sbi-prime-cardface.png"),
+            ("American Express Membership Rewards Credit Card", "American Express", 1000.0, 4500.0, "Rewards", 0.02, 30000.0, 720, "1 Membership Reward point per Rs. 50, Bonus 5,000 Membership Rewards points upon First Year Card Renewal, Redemption options cover everyday brands like Flipkart & Amazon to premium ones like Tanishq and Taj, 4,000 Membership Rewards Points on card activation, Monthly milestone benefits",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/American-Express-Membership-Rewards%C2%AE-Credit-Card.png"),
+            ("HDFC MoneyBack+ Credit Card", "HDFC Bank", 500.0, 500.0, "Cashback", 0.0133, 15000.0, 650, "10X CashPoints on Amazon, BigBasket, Flipkart, Reliance Smart SuperStore & Swiggy, 2 CashPoints per Rs. 150 on other spends, 500 cashpoints on card activation, Quarterly milestone benefit",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/08/HDFC-MoneyBack-Plus-Credit-Card.png"),
+            ("Axis Bank Horizon Credit Card", "Axis Bank", 3000.0, 3000.0, "Travel Points", 0.05, 35000.0, 700,
+             "5 EDGE Miles per Rs. 100 spent on Travel EDGE portal and at direct airline websites/counters, 1 EDGE Mile = 1 Partner Point, 8 complimentary visits to international and up to 32 to domestic airport lounges per year", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/Axis-Bank-Horizon-Credit-Card.png"),
+            ("American Express Platinum Travel Credit Card", "American Express", 5000.0, 5000.0, "Travel Points", 0.02, 40000.0, 730,
+             "1 Membership Rewards Point for every Rs. 50 spent, 8 domestic lounge visits per year, 25,000 Membership Rewards Points and Taj Stay voucher worth Rs. 10,000 on spending Rs. 4 Lakh in a year", "#", "https://www.paisabazaar.com/wp-content/uploads/2024/06/American-Express%C2%AE-Platinum-Travel-Credit-Card.png"),
+            ("MakeMyTrip ICICI Bank Credit Card", "ICICI Bank", 999.0, 999.0, "Travel", 0.01, 20000.0, 680, "Unlimited 6% myCash on hotel bookings via MakeMyTrip, Unlimited 3% myCash on flights, holiday packages, cabs & bus bookings via MakeMyTrip, 1% myCash on all other spends, Low forex markup fee of 0.99%, Lounge access is not spend-based, 25 myCash on every train booking via MakeMyTrip, Joining and renewal benefits via MMT voucher and Gold memberships",
+             "#", "https://www.paisabazaar.com/wp-content/webp-express/webp-images/doc-root/wp-content/uploads/2021/12/MakeMyTrip-ICICI-Credit-Card-300x190.png.webp"),
+            ("HDFC Infinia Credit Card Ã¢â‚¬â€œ Metal Edition", "HDFC Bank", 12500.0, 12500.0, "Rewards", 0.0333, 80000.0, 780,
+             "Invite-only, All-in-one benefits (travel, shopping, movies etc.), Complimentary Club Marriott membership, Complimentary luxury hotel membership, 1+1 complimentary weekend buffet at ITC hotels, Unlimited lounge access worldwide, Low forex markup fee 2%, Unlimited complimentary golf games", "#", "https://www.paisabazaar.com/wp-content/uploads/2017/10/HDFC-infinia-metal-edition.jpg"),
+            ("American Express Platinum Card", "American Express", 66000.0, 66000.0, "Premium", 0.01, 100000.0, 790, "Stay vouchers Rs. 45,000 from Taj/SeleQtions/Vivanta Hotels, Excellent golf benefit, Multiple hotel memberships (Accor Plus, I Prefer, Marriott Bonvoy, Hilton Honors, Taj Reimagined), Exclusive deals on airlines (Qatar, Air France, Emirates etc.), World-class Platinum concierge service, Unlimited airport lounge access, VIP-only event invitations",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2022/11/American-Express-Platinum-Credit-Card.png"),
+            ("ICICI Bank Emeralde Private Metal Credit Card", "ICICI Bank", 12499.0, 12499.0, "Rewards", 0.06, 75000.0, 770, "Complimentary memberships to Taj Epicure, EazyDiner Prime and Priority Pass Program, 1:1 redemption ratio for reward points, Unlimited access to golf lessons or rounds, Unlimited domestic & international lounges at select airports, Low forex markup fee 2%, Buy one get one ticket free on BookMyShow, Overall benefits on dining/movies/entertainment/golf/travel, Exclusive concierge services",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2023/10/ICICI-Bank-Emeralde-Private-Metal-Credit-Card-300x190.webp"),
+            ("BPCL SBI Card Octane", "SBI Card", 1499.0, 1499.0, "Fuel", 0.01, 15000.0, 660, "7.25% value back on BPCL fuel purchases, 6,000 bonus reward points welcome benefit, 1% surcharge waiver across all BPCL petrol pumps, Additional benefits like complimentary lounge visit, fraud liability cover, 25 reward points for every Rs. 100 spent at BPCL Fuel, Lubricants & Bharat Gas, Instant reward redemption at select BPCL petrol pumps",
+             "#", "https://www.paisabazaar.com/wp-content/uploads/2020/11/BPCL-SBI-Card-Octane-300x197.png"),
+            ("IDFC FIRST Power+ Credit Card", "IDFC FIRST Bank", 499.0, 499.0, "Fuel", 0.02, 12000.0, 640,
+             "5% savings as 30 rewards points per Rs. 150 spends on HPCL fuel purchase, 5% savings as 30 Reward points per Rs. 150 spends on groceries and utilities, Uncapped 3 reward points per Rs. 150 on all other eligible spends, Happy Coins via HP Pay App", "#", "https://www.paisabazaar.com/wp-content/uploads/2023/04/hpcl-power-plus.jpg"),
+            ("ICICI HPCL Super Saver Credit Card", "ICICI Bank", 500.0, 500.0, "Fuel", 0.02, 10000.0, 630, "Up to 5% value back on HPCL fuel, 4% cashback on fuel spends at HPCL pumps, 5% back as reward points on grocery, departmental stores and utility bill spends, 2 reward points on every Rs. 100 spent on retail purchases",
+             "#", "https://www.paisabazaar.com/wp-content/webp-express/webp-images/doc-root/wp-content/uploads/2021/12/ICICI-Bank-HPCL-Super-Saver-Credit-Card-300x190.png.webp"),
+            ("IndianOil Axis Bank Credit Card", "Axis Bank", 500.0, 500.0, "Fuel", 0.01, 10000.0, 630,
+             "4% value back on fuel spends at any IOCL outlet, 1% value back on online shopping, EDGE rewards equivalent to 1st fuel spend up to Rs. 250 welcome bonus, Discount on booking movie tickets via BookMyShow, Discount on dining bills at partner restaurants", "#", "https://www.paisabazaar.com/wp-content/uploads/2019/12/Indianoil-Axis.jpg")
+        ]
+        for card_data in cards_to_add:
+            # Use add_card to ensure integrity check and proper insertion
+            add_card(*card_data)
+        print("Dummy data added successfully.")
+    else:
+        print("Database already contains data, skipping dummy data addition.")
+
+
+def get_card_by_name(card_name: str) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM credit_cards WHERE name = ?", (card_name,))
+    card = cursor.fetchone()
+    conn.close()
+    return dict(card) if card else None
+
+
+def update_card(card_id: int, **kwargs: Any) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    set_clauses = []
+    params = []
+    for key, value in kwargs.items():
+        if key in ['name', 'issuer', 'joining_fee', 'annual_fee', 'reward_type', 'reward_rate',
+                   'eligibility_income', 'eligibility_credit_score', 'special_perks',
+                   'affiliate_link', 'image_url']:  # Ensure only valid columns are updated
+            set_clauses.append(f"{key} = ?")
+            params.append(value)
+    params.append(card_id)
+
+    if set_clauses:
+        query = f"UPDATE credit_cards SET {', '.join(set_clauses)} WHERE id = ?;"
+        try:
+            cursor.execute(query, params)
+            conn.commit()
+            return "Card updated successfully."
+        except Exception as e:
+            return f"Error updating card: {e}"
+        finally:
+            conn.close()
+    conn.close()
+    return "No valid fields to update."
+
+
+def delete_card(card_id: int) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM credit_cards WHERE id = ?;", (card_id,))
+        conn.commit()
+        return "Card deleted successfully."
+    except Exception as e:
+        return f"Error deleting card: {e}"
+    finally:
+        conn.close()
+
+
+def get_all_cards() -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM credit_cards;")
+    all_cards = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in all_cards]
+
+
+
+================================================
+FILE: Dockerfile
+================================================
+# Use the official Python image as a base
+FROM python:3.9-slim-buster
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install the Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the entire application code into the container
+COPY . .
+
+# Initialize the database and populate data during container build
+# This ensures the database file is present when the app starts
+RUN python -c "from database import init_db, populate_initial_data; init_db(); populate_initial_data()"
+
+# Expose the port your Flask app will listen on
+# Cloud Run sets the PORT environment variable dynamically
+ENV PORT=8080
+EXPOSE $PORT
+
+# Run the Flask application when the container starts
+# Use gunicorn or similar for production, for simplicity, using Flask's built-in server
+CMD ["python", "app.py"]
+
+
+
+================================================
+FILE: recommender.py
+================================================
+# recommender.py
+
+def get_card_recommendations(raw_cards: list[dict], user_data: dict) -> list[dict]:
+    """
+    Processes a list of raw credit card data, calculates estimated annual rewards,
+    generates key reasons for recommendation, and returns a ranked list of top cards.
+
+    Args:
+        raw_cards: A list of dictionaries, where each dictionary represents a credit card
+                   with all its details (name, reward_type, special_perks, fees, etc.).
+        user_data: A dictionary containing user's collected information like
+                   'spending_habits', 'preferred_benefits'.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a recommended card
+        with 'card_name', 'image_url', 'key_reasons', 'reward_simulation',
+        'net_benefit', and 'affiliate_link'. The list is sorted by 'net_benefit'
+        in descending order, limited to the top 5 unique cards.
+    """
+    ranked_cards = []
+
+    # Calculate total spending from all categorized habits
+    total_monthly_spending = sum(user_data['spending_habits'].values())
+
+    # Convert preferred_benefits to a set for faster lookup
+    user_preferred_benefits_set = set(user_data['preferred_benefits'])
+
+    for card in raw_cards:
+        estimated_annual_rewards = 0
+        key_reasons = []
+
+        # --- Base reward calculation and reason generation based on reward_type ---
+        reward_type_lower = card['reward_type'].lower()
+        special_perks_lower = card['special_perks'].lower()
+
+        if reward_type_lower == 'cashback':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12)
+            key_reasons.append(
+                f"Offers a solid base cashback of {card['reward_rate']*100:.2f}% on general spends.")
+            if 'online spends' in special_perks_lower:
+                online_spends = user_data['spending_habits'].get('dining', 0) + \
+                    user_data['spending_habits'].get('entertainment', 0) + \
+                    user_data['spending_habits'].get('groceries', 0) + \
+                    user_data['spending_habits'].get('travel', 0)
+                # Additional 1% for online
+                estimated_annual_rewards += (online_spends * 0.01 * 12)
+                key_reasons.append(
+                    "Provides enhanced cashback for your online spending habits.")
+
+        elif reward_type_lower == 'travel points':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12) * 0.5
+            key_reasons.append(
+                "Earns valuable travel points, ideal for your travel preferences.")
+
+        elif reward_type_lower == 'rewards':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12) * 0.35
+            key_reasons.append(
+                "Offers versatile reward points for various redemption options.")
+            if 'dining' in user_data['spending_habits'] and 'dining' in special_perks_lower:
+                key_reasons.append("Accelerated rewards on dining expenses.")
+            if 'groceries' in user_data['spending_habits'] and 'groceries' in special_perks_lower:
+                key_reasons.append("Accelerated rewards on grocery purchases.")
+            if 'movies' in special_perks_lower and ('entertainment' in user_data['spending_habits'] or 'outings/activities' in user_data['spending_habits'].keys()):
+                key_reasons.append(
+                    "Provides good benefits for movie and entertainment spends.")
+
+        elif reward_type_lower == 'co-branded':
+            if 'tata neu' in card['name'].lower() and ('dining' in user_data['spending_habits'] or 'groceries' in user_data['spending_habits']):
+                estimated_annual_rewards += (user_data['spending_habits'].get(
+                    'dining', 0) + user_data['spending_habits'].get('groceries', 0)) * 0.05 * 12
+                key_reasons.append(
+                    "Offers significant value-back on Tata Neu and its partner brands.")
+            elif 'amazon pay icici' in card['name'].lower() and 'online shopping' in user_preferred_benefits_set:
+                online_shopping_spends = user_data['spending_habits'].get(
+                    'dining', 0) + user_data['spending_habits'].get('groceries', 0) + user_data['spending_habits'].get('entertainment', 0)
+                estimated_annual_rewards += online_shopping_spends * 0.03 * 12
+                key_reasons.append(
+                    "Excellent for Amazon spending and general online shopping, matching your preferences.")
+            else:
+                estimated_annual_rewards += (total_monthly_spending *
+                                             card['reward_rate'] * 12) * 0.6
+                key_reasons.append(
+                    "Provides specialized co-branded benefits and rewards.")
+
+        elif reward_type_lower == 'fuel':
+            fuel_spending = user_data['spending_habits'].get('fuel', 0)
+            if fuel_spending > 0:
+                estimated_annual_rewards += (fuel_spending *
+                                             card['reward_rate'] * 12)
+                key_reasons.append(
+                    f"Offers substantial savings on fuel (approx. {card['reward_rate']*100:.2f}% value back).")
+            else:
+                key_reasons.append(
+                    "Primarily a fuel card, but offers other general benefits suitable for your profile.")
+
+        # --- Add reasons based on preferred benefits matching card perks (more flexible) ---
+        if 'lounge access' in user_preferred_benefits_set and 'lounge access' in special_perks_lower:
+            key_reasons.append("Includes valuable airport lounge access.")
+        if 'travel' in user_preferred_benefits_set and ('travel points' in reward_type_lower or 'travel' in special_perks_lower):
+            if "Strong travel benefits, including lounge access." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Features strong travel benefits, including potential lounge access.")
+        if 'cashback' in user_preferred_benefits_set and 'cashback' in reward_type_lower:
+            if "Provides good cashback opportunities." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Offers good cashback opportunities on your spends.")
+        if 'amazon vouchers' in user_preferred_benefits_set and 'amazon vouchers' in special_perks_lower:
+            key_reasons.append("Comes with valuable Amazon vouchers.")
+        if 'dining' in user_preferred_benefits_set and 'dining' in special_perks_lower:
+            if "Great for dining discounts/rewards." not in key_reasons:  # Avoid duplication
+                key_reasons.append("Ideal for dining discounts and rewards.")
+        if 'movies' in user_preferred_benefits_set and 'movies' in special_perks_lower:
+            key_reasons.append("Offers specific benefits for movie tickets.")
+        if 'fuel' in user_preferred_benefits_set and 'fuel' in special_perks_lower:
+            if "Excellent for fuel savings." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Provides significant savings on fuel expenses.")
+
+        # Ensure unique reasons and add a generic one if no specific reasons found
+        key_reasons = list(set(key_reasons))  # Deduplicate reasons
+        if not key_reasons:
+            key_reasons.append(
+                "A strong all-around card based on your overall financial profile.")
+
+        # Calculate net annual benefit (estimated rewards minus total fees)
+        net_annual_benefit = estimated_annual_rewards - \
+            (card['joining_fee'] + card['annual_fee'])
+
+        # Only include cards with a positive net benefit or those with minimal/no fees
+        # Adjusted the fee threshold slightly to allow more cards through if they have decent benefits
+        if net_annual_benefit >= 0 or (card['joining_fee'] <= 750 and card['annual_fee'] <= 750):
+            ranked_cards.append({
+                "card_name": card['name'],
+                "image_url": card['image_url'],
+                "key_reasons": ", ".join(key_reasons),
+                "reward_simulation": f"You could potentially save/earn up to Rs. {net_annual_benefit:,.2f} per year!",
+                "net_benefit": net_annual_benefit,  # Used for sorting
+                "affiliate_link": card['affiliate_link']
+            })
+
+    # --- Deduplicate and Rank Final Recommendations ---
+    unique_cards = {}
+    for card in ranked_cards:
+        card_name = card['card_name']
+        if card_name not in unique_cards or card['net_benefit'] > unique_cards[card_name]['net_benefit']:
+            unique_cards[card_name] = card
+
+    recommendations = sorted(list(unique_cards.values()),
+                             key=lambda x: x['net_benefit'], reverse=True)[:5]
+
+    return recommendations
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+Flask
+langchain
+langchain-google-genai
+pydantic
+python-dotenv
+twilio
+
+
+
+================================================
+FILE: static/css/style.css
+================================================
+/* static/css/style.css */
+:root {
+    --primary-color: #4A90E2; /* A modern blue */
+    --secondary-color: #50E3C2; /* A vibrant accent */
+    --text-color: #333;
+    --light-text-color: #666;
+    --background-light: #F0F2F5; /* A soft, light background */
+    --background-medium: #E2E8F0; /* Slightly darker for contrast */
+    --card-background: #FFFFFF;
+    --border-color: #DDE1E6;
+    --shadow-light: rgba(0, 0, 0, 0.08);
+    --shadow-medium: rgba(0, 0, 0, 0.12);
+    --user-message-bg: #D9F7BE; /* Softer green for user messages */
+    --user-message-text: #376E0A;
+    --assistant-message-bg: #FEEFB3; /* Softer yellow for assistant messages */
+    --assistant-message-text: #8A6D3B;
+    --button-hover: #3A7BBF;
+    --link-color: #4A90E2;
+    --link-hover: #3A7BBF;
+}
+
+body {
+    font-family: 'Inter', sans-serif; /* Using a more modern font */
+    margin: 0;
+    padding: 25px; /* Slightly more padding */
+    background-color: var(--background-light);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    background-color: var(--card-background);
+    border-radius: 12px; /* More rounded corners */
+    box-shadow: 0 6px 20px var(--shadow-medium); /* More prominent shadow */
+    width: 100%;
+    max-width: 900px; /* Slightly wider container */
+    padding: 30px; /* More internal padding */
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-height: 650px; /* Adjusted min-height */
+    transition: transform 0.3s ease-in-out; /* Smooth transition on hover (if applicable later) */
+}
+
+.container:hover {
+    transform: translateY(-3px); /* Subtle lift on hover */
+}
+
+h1 {
+    text-align: center;
+    color: var(--primary-color); /* Primary color for headings */
+    margin-bottom: 25px;
+    font-size: 2.5em; /* Larger main heading */
+    font-weight: 700; /* Bolder */
+    letter-spacing: -0.5px;
+}
+
+.chat-window {
+    flex-grow: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    padding: 20px; /* More padding */
+    overflow-y: auto;
+    margin-bottom: 20px;
+    background-color: var(--background-medium); /* Slightly darker background for chat */
+    display: flex; /* Enable flex for messages */
+    flex-direction: column; /* Stack messages vertically */
+    gap: 10px; /* Space between messages */
+    box-shadow: inset 0 2px 5px var(--shadow-light); /* Subtle inner shadow */
+}
+
+.message {
+    padding: 10px 18px; /* More padding */
+    border-radius: 20px; /* More rounded, "pill-shaped" */
+    max-width: 75%; /* Slightly wider max-width */
+    word-wrap: break-word;
+    font-size: 0.95em;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Subtle shadow for messages */
+}
+
+.message.user {
+    background-color: var(--user-message-bg);
+    color: var(--user-message-text);
+    align-self: flex-end;
+    margin-left: auto;
+    border-bottom-right-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.message.assistant {
+    background-color: var(--assistant-message-bg);
+    color: var(--assistant-message-text);
+    align-self: flex-start;
+    margin-right: auto;
+    border-bottom-left-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.input-area {
+    display: flex;
+    gap: 15px; /* More space between input and button */
+    align-items: center; /* Vertically align items */
+}
+
+.input-area input[type="text"] {
+    flex-grow: 1;
+    padding: 12px 15px; /* More padding */
+    border: 1px solid var(--border-color);
+    border-radius: 8px; /* More rounded */
+    font-size: 17px; /* Slightly larger font */
+    outline: none; /* Remove default outline */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.input-area input[type="text"]:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2); /* Focus glow */
+}
+
+.input-area button {
+    padding: 12px 20px; /* More padding */
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 8px; /* More rounded */
+    cursor: pointer;
+    font-size: 17px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.input-area button:hover {
+    background-color: var(--button-hover);
+    transform: translateY(-2px); /* Subtle lift on hover */
+}
+
+.input-area button:active {
+    transform: translateY(0); /* Press effect */
+}
+
+/* Recommendations Summary */
+.recommendations-summary {
+    margin-top: 30px; /* More space above */
+    padding: 25px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background-color: var(--background-medium); /* Use background-medium for consistency */
+    box-shadow: 0 4px 15px var(--shadow-light); /* Softer shadow */
+}
+
+.recommendations-summary h2 {
+    text-align: center;
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-size: 2em;
+    font-weight: 600;
+}
+
+.card-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 25px; /* Increased gap between cards */
+    justify-content: center;
+    margin-bottom: 25px;
+}
+
+.card-item {
+    background-color: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    box-shadow: 0 4px 12px var(--shadow-light); /* Improved shadow for cards */
+    padding: 20px; /* More padding */
+    width: calc(33.33% - 25px); /* Adjusted for gap */
+    box-sizing: border-box;
+    text-align: center;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-item:hover {
+    transform: translateY(-5px); /* Lift effect on hover */
+    box-shadow: 0 8px 20px var(--shadow-medium); /* Enhanced shadow on hover */
+}
+
+.card-item img {
+    max-width: 120px; /* Slightly larger images */
+    height: auto;
+    margin-bottom: 15px;
+    border-radius: 8px; /* More rounded image corners */
+    object-fit: cover; /* Ensure image covers space without distortion */
+    border: 1px solid var(--border-color); /* Subtle border for images */
+}
+
+.card-item h3 {
+    margin-top: 0;
+    color: var(--primary-color);
+    font-size: 1.3em; /* Slightly larger */
+    margin-bottom: 8px;
+}
+
+.card-item p {
+    font-size: 0.9em;
+    color: var(--light-text-color);
+    margin-bottom: 8px; /* Consistent spacing */
+}
+
+.card-item .reasons {
+    font-style: italic;
+    color: var(--light-text-color);
+    margin-bottom: 12px;
+    font-size: 0.85em; /* Slightly smaller for emphasis on style */
+}
+
+.card-item .reward-sim {
+    font-weight: bold;
+    color: var(--secondary-color); /* Use secondary color for emphasis */
+    font-size: 1.1em; /* Larger and more prominent */
+    margin-bottom: 18px;
+}
+
+.card-item a {
+    display: inline-block;
+    padding: 10px 18px;
+    background-color: var(--secondary-color); /* Use secondary color for action button */
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    font-weight: 600;
+}
+
+.card-item a:hover {
+    background-color: #44C7B0; /* Slightly darker shade of secondary color */
+    transform: translateY(-2px);
+}
+
+.recommendations-summary button {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background-color: #6c757d; /* Keep grey for "show more" or similar */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 17px;
+    margin-top: 25px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.recommendations-summary button:hover {
+    background-color: #5a6268;
+    transform: translateY(-2px);
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    body {
+        padding: 15px;
+    }
+
+    .container {
+        padding: 20px;
+        min-height: auto;
+    }
+
+    h1 {
+        font-size: 2em;
+    }
+
+    .chat-window {
+        min-height: 300px;
+        padding: 15px;
+    }
+
+    .card-list {
+        gap: 15px;
+    }
+
+    .card-item {
+        width: calc(50% - 15px); /* 2 cards per row on smaller screens */
+        padding: 15px;
+    }
+
+    .recommendations-summary h2 {
+        font-size: 1.8em;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 10px;
+    }
+
+    .container {
+        padding: 15px;
+    }
+
+    h1 {
+        font-size: 1.8em;
+    }
+
+    .input-area {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .input-area button {
+        width: 100%;
+    }
+
+    .message {
+        max-width: 90%;
+        padding: 8px 15px;
+    }
+
+    .card-item {
+        width: 100%; /* 1 card per row on very small screens */
+        padding: 15px;
+    }
+}
+
+
+================================================
+FILE: static/js/main.js
+================================================
+// static/js/main.js
+const chatWindow = document.getElementById('chat-window');
+const userInput = document.getElementById('user-input');
+const recommendationsSummary = document.getElementById('recommendations-summary');
+const cardList = document.getElementById('card-list');
+
+let sessionId = localStorage.getItem('creditCardAdvisorSessionId');
+if (!sessionId) {
+    sessionId = 'user_' + Date.now();
+    localStorage.setItem('creditCardAdvisorSessionId', sessionId);
+}
+
+function appendMessage(sender, message) {
+    const messageDiv = document.createElement('div');
+    messageDiv.classList.add('message', sender);
+    messageDiv.textContent = message;
+    chatWindow.appendChild(messageDiv);
+    chatWindow.scrollTop = chatWindow.scrollHeight; // Auto-scroll to bottom
+}
+
+async function sendMessage() {
+    const message = userInput.value.trim();
+    if (message === '') return;
+
+    appendMessage('user', message);
+    userInput.value = '';
+
+    try {
+        const response = await fetch('/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message: message, session_id: sessionId }),
+        });
+        const data = await response.json();
+        appendMessage('assistant', data.response);
+
+        if (data.recommendations && data.recommendations.length > 0) {
+            displayRecommendations(data.recommendations);
+        } else {
+            recommendationsSummary.style.display = 'none'; // Hide if no recommendations
+        }
+
+    } catch (error) {
+        console.error('Error sending message:', error);
+        appendMessage('assistant', 'Sorry, I am having trouble connecting. Please try again.');
+    }
+}
+
+function handleKeyPress(event) {
+    if (event.key === 'Enter') {
+        sendMessage();
+    }
+}
+
+function displayRecommendations(cards) {
+    chatWindow.style.display = 'none'; // Hide chat 
+    document.querySelector('.input-area').style.display = 'none'; // Hide input area 
+    recommendationsSummary.style.display = 'block'; // Show summary 
+    cardList.innerHTML = ''; // Clear previous recommendations
+
+    cards.forEach(card => {
+        const cardItem = document.createElement('div');
+        cardItem.classList.add('card-item');
+        cardItem.innerHTML = `
+            <img src="${card.image_url}" alt="${card.card_name}">
+            <h3>${card.card_name}</h3>
+            <p class="reasons">${card.key_reasons}</p>
+            <p class="reward-sim">${card.reward_simulation}</p>
+            <a href="${card.affiliate_link}" target="_blank">Apply Now</a>
+        `;
+        cardList.appendChild(cardItem);
+    });
+}
+
+function restartFlow() {
+    localStorage.removeItem('creditCardAdvisorSessionId'); // Clear session
+    window.location.reload(); // Reload the page to restart the conversation 
+}
+
+
+================================================
+FILE: templates/index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Credit Card Advisor</title>
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="font-inter bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl flex flex-col h-[85vh] overflow-hidden">
+        <h1 class="text-3xl font-bold text-blue-600 text-center py-6 border-b border-gray-200">Credit Card Advisor</h1>
+        
+        <div class="flex-grow p-5 overflow-y-auto flex flex-col space-y-4 bg-gray-50 border-b border-gray-200">
+            <!-- Chat messages will be appended here -->
+            <div class="max-w-[80%] p-3 rounded-xl bg-yellow-100 text-yellow-800 self-start mr-auto rounded-bl-sm">
+                Hello! I'm your credit card advisor. What's your monthly income in INR?
+            </div>
+        </div>
+
+        <div id="recommendations-summary" class="hidden p-5 bg-blue-50 border-t border-gray-200 overflow-y-auto">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4 text-center">Recommended Credit Cards</h2>
+            <div id="card-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 justify-items-center">
+                <!-- Recommended cards will be dynamically inserted here -->
+            </div>
+        </div>
+
+        <div class="flex p-5 space-x-3 border-t border-gray-200">
+            <input type="text" id="user-input" placeholder="Type your message..." class="flex-grow p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="send-button" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-full shadow-md hover:bg-blue-700 transition-colors duration-200 ease-in-out">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatHistoryDiv = document.querySelector('.flex-grow.p-5'); // Select the div where messages are added
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const recommendationsSummary = document.getElementById('recommendations-summary');
+        const cardList = document.getElementById('card-list');
+
+        const sessionId = 'user_' + Math.random().toString(36).substr(2, 9); 
+
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        function addMessage(sender, message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('max-w-[80%]', 'p-3', 'rounded-xl', 'mb-2'); // Base styling
+
+            if (sender === 'user') {
+                messageDiv.classList.add('bg-blue-100', 'text-blue-800', 'self-end', 'ml-auto', 'rounded-br-sm'); // User message styles
+            } else {
+                messageDiv.classList.add('bg-yellow-100', 'text-yellow-800', 'self-start', 'mr-auto', 'rounded-bl-sm'); // Bot message styles
+            }
+            
+            messageDiv.textContent = message;
+            chatHistoryDiv.appendChild(messageDiv);
+            chatHistoryDiv.scrollTop = chatHistoryDiv.scrollHeight; // Auto-scroll to latest
+        }
+
+        function displayRecommendations(cards) {
+            cardList.innerHTML = ''; // Clear previous recommendations
+            if (cards && cards.length > 0) {
+                recommendationsSummary.classList.remove('hidden'); // Show summary container
+                cards.forEach(card => {
+                    const cardItem = document.createElement('div');
+                    cardItem.classList.add('bg-white', 'rounded-lg', 'shadow-md', 'p-4', 'flex', 'flex-col', 'space-y-3', 'border', 'border-gray-200', 'transition-transform', 'duration-200', 'ease-in-out', 'hover:scale-105');
+                    
+                    cardItem.innerHTML = `
+                        <img src="${card.image_url}" 
+                             alt="${card.card_name}" 
+                             class="max-w-[150px] h-auto mx-auto rounded-md border border-gray-200 p-2 object-contain">
+                        <h3 class="text-lg font-semibold text-gray-800 text-center">${card.card_name}</h3>
+                        <p class="text-sm text-gray-600 text-center"><strong>Key Reasons:</strong> ${card.key_reasons}</p>
+                        <p class="text-base font-bold text-green-600 text-center">${card.reward_simulation}</p>
+                        <a href="${card.affiliate_link || '#'}" target="_blank" class="mt-auto block text-center bg-green-500 text-white py-2 px-4 rounded-full hover:bg-green-600 transition-colors duration-200">Learn More & Apply</a>
+                    `;
+                    cardList.appendChild(cardItem);
+                });
+                recommendationsSummary.scrollTop = 0; // Scroll recommendations to top
+            } else {
+                recommendationsSummary.classList.add('hidden'); // Hide if no recommendations
+            }
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (message === '') return;
+
+            addMessage('user', message);
+            userInput.value = ''; // Clear input immediately
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message, session_id: sessionId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage('bot', data.response); // Display conversational part of the response
+
+                // Check and display recommendations if available
+                if (data.recommendations && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                    displayRecommendations(data.recommendations);
+                } else {
+                    displayRecommendations([]); // Clear old recommendations if none in this response
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                addMessage('bot', 'Oops! Something went wrong. Please try again.');
+                displayRecommendations([]); // Clear any old recommendations on error
+            }
+        }
+    </script>
+</body>
+</html>
+
+
+
+```
+
+`recommender.py`:
+
+```py
+# recommender.py
+
+def get_card_recommendations(raw_cards: list[dict], user_data: dict) -> list[dict]:
+    """
+    Processes a list of raw credit card data, calculates estimated annual rewards,
+    generates key reasons for recommendation, and returns a ranked list of top cards.
+
+    Args:
+        raw_cards: A list of dictionaries, where each dictionary represents a credit card
+                   with all its details (name, reward_type, special_perks, fees, etc.).
+        user_data: A dictionary containing user's collected information like
+                   'spending_habits', 'preferred_benefits'.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a recommended card
+        with 'card_name', 'image_url', 'key_reasons', 'reward_simulation',
+        'net_benefit', and 'affiliate_link'. The list is sorted by 'net_benefit'
+        in descending order, limited to the top 5 unique cards.
+    """
+    ranked_cards = []
+
+    # Calculate total spending from all categorized habits
+    total_monthly_spending = sum(user_data['spending_habits'].values())
+
+    # Convert preferred_benefits to a set for faster lookup
+    user_preferred_benefits_set = set(user_data['preferred_benefits'])
+
+    for card in raw_cards:
+        estimated_annual_rewards = 0
+        key_reasons = []
+
+        # --- Base reward calculation and reason generation based on reward_type ---
+        reward_type_lower = card['reward_type'].lower()
+        special_perks_lower = card['special_perks'].lower()
+
+        if reward_type_lower == 'cashback':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12)
+            key_reasons.append(
+                f"Offers a solid base cashback of {card['reward_rate']*100:.2f}% on general spends.")
+            if 'online spends' in special_perks_lower:
+                online_spends = user_data['spending_habits'].get('dining', 0) + \
+                    user_data['spending_habits'].get('entertainment', 0) + \
+                    user_data['spending_habits'].get('groceries', 0) + \
+                    user_data['spending_habits'].get('travel', 0)
+                # Additional 1% for online
+                estimated_annual_rewards += (online_spends * 0.01 * 12)
+                key_reasons.append(
+                    "Provides enhanced cashback for your online spending habits.")
+
+        elif reward_type_lower == 'travel points':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12) * 0.5
+            key_reasons.append(
+                "Earns valuable travel points, ideal for your travel preferences.")
+
+        elif reward_type_lower == 'rewards':
+            estimated_annual_rewards += (total_monthly_spending *
+                                         card['reward_rate'] * 12) * 0.35
+            key_reasons.append(
+                "Offers versatile reward points for various redemption options.")
+            if 'dining' in user_data['spending_habits'] and 'dining' in special_perks_lower:
+                key_reasons.append("Accelerated rewards on dining expenses.")
+            if 'groceries' in user_data['spending_habits'] and 'groceries' in special_perks_lower:
+                key_reasons.append("Accelerated rewards on grocery purchases.")
+            if 'movies' in special_perks_lower and ('entertainment' in user_data['spending_habits'] or 'outings/activities' in user_data['spending_habits'].keys()):
+                key_reasons.append(
+                    "Provides good benefits for movie and entertainment spends.")
+
+        elif reward_type_lower == 'co-branded':
+            if 'tata neu' in card['name'].lower() and ('dining' in user_data['spending_habits'] or 'groceries' in user_data['spending_habits']):
+                estimated_annual_rewards += (user_data['spending_habits'].get(
+                    'dining', 0) + user_data['spending_habits'].get('groceries', 0)) * 0.05 * 12
+                key_reasons.append(
+                    "Offers significant value-back on Tata Neu and its partner brands.")
+            elif 'amazon pay icici' in card['name'].lower() and 'online shopping' in user_preferred_benefits_set:
+                online_shopping_spends = user_data['spending_habits'].get(
+                    'dining', 0) + user_data['spending_habits'].get('groceries', 0) + user_data['spending_habits'].get('entertainment', 0)
+                estimated_annual_rewards += online_shopping_spends * 0.03 * 12
+                key_reasons.append(
+                    "Excellent for Amazon spending and general online shopping, matching your preferences.")
+            else:
+                estimated_annual_rewards += (total_monthly_spending *
+                                             card['reward_rate'] * 12) * 0.6
+                key_reasons.append(
+                    "Provides specialized co-branded benefits and rewards.")
+
+        elif reward_type_lower == 'fuel':
+            fuel_spending = user_data['spending_habits'].get('fuel', 0)
+            if fuel_spending > 0:
+                estimated_annual_rewards += (fuel_spending *
+                                             card['reward_rate'] * 12)
+                key_reasons.append(
+                    f"Offers substantial savings on fuel (approx. {card['reward_rate']*100:.2f}% value back).")
+            else:
+                key_reasons.append(
+                    "Primarily a fuel card, but offers other general benefits suitable for your profile.")
+
+        # --- Add reasons based on preferred benefits matching card perks (more flexible) ---
+        if 'lounge access' in user_preferred_benefits_set and 'lounge access' in special_perks_lower:
+            key_reasons.append("Includes valuable airport lounge access.")
+        if 'travel' in user_preferred_benefits_set and ('travel points' in reward_type_lower or 'travel' in special_perks_lower):
+            if "Strong travel benefits, including lounge access." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Features strong travel benefits, including potential lounge access.")
+        if 'cashback' in user_preferred_benefits_set and 'cashback' in reward_type_lower:
+            if "Provides good cashback opportunities." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Offers good cashback opportunities on your spends.")
+        if 'amazon vouchers' in user_preferred_benefits_set and 'amazon vouchers' in special_perks_lower:
+            key_reasons.append("Comes with valuable Amazon vouchers.")
+        if 'dining' in user_preferred_benefits_set and 'dining' in special_perks_lower:
+            if "Great for dining discounts/rewards." not in key_reasons:  # Avoid duplication
+                key_reasons.append("Ideal for dining discounts and rewards.")
+        if 'movies' in user_preferred_benefits_set and 'movies' in special_perks_lower:
+            key_reasons.append("Offers specific benefits for movie tickets.")
+        if 'fuel' in user_preferred_benefits_set and 'fuel' in special_perks_lower:
+            if "Excellent for fuel savings." not in key_reasons:  # Avoid duplication
+                key_reasons.append(
+                    "Provides significant savings on fuel expenses.")
+
+        # Ensure unique reasons and add a generic one if no specific reasons found
+        key_reasons = list(set(key_reasons))  # Deduplicate reasons
+        if not key_reasons:
+            key_reasons.append(
+                "A strong all-around card based on your overall financial profile.")
+
+        # Calculate net annual benefit (estimated rewards minus total fees)
+        net_annual_benefit = estimated_annual_rewards - \
+            (card['joining_fee'] + card['annual_fee'])
+
+        # Only include cards with a positive net benefit or those with minimal/no fees
+        # Adjusted the fee threshold slightly to allow more cards through if they have decent benefits
+        if net_annual_benefit >= 0 or (card['joining_fee'] <= 750 and card['annual_fee'] <= 750):
+            ranked_cards.append({
+                "card_name": card['name'],
+                "image_url": card['image_url'],
+                "key_reasons": ", ".join(key_reasons),
+                "reward_simulation": f"You could potentially save/earn up to Rs. {net_annual_benefit:,.2f} per year!",
+                "net_benefit": net_annual_benefit,  # Used for sorting
+                "affiliate_link": card['affiliate_link']
+            })
+
+    # --- Deduplicate and Rank Final Recommendations ---
+    unique_cards = {}
+    for card in ranked_cards:
+        card_name = card['card_name']
+        if card_name not in unique_cards or card['net_benefit'] > unique_cards[card_name]['net_benefit']:
+            unique_cards[card_name] = card
+
+    recommendations = sorted(list(unique_cards.values()),
+                             key=lambda x: x['net_benefit'], reverse=True)[:5]
+
+    return recommendations
+
+```
+
+`requirements.txt`:
+
+```txt
+Flask
+langchain
+langchain-google-genai
+pydantic
+python-dotenv
+twilio
+
+```
+
+`static\css\style.css`:
+
+```css
+/* static/css/style.css */
+:root {
+    --primary-color: #4A90E2; /* A modern blue */
+    --secondary-color: #50E3C2; /* A vibrant accent */
+    --text-color: #333;
+    --light-text-color: #666;
+    --background-light: #F0F2F5; /* A soft, light background */
+    --background-medium: #E2E8F0; /* Slightly darker for contrast */
+    --card-background: #FFFFFF;
+    --border-color: #DDE1E6;
+    --shadow-light: rgba(0, 0, 0, 0.08);
+    --shadow-medium: rgba(0, 0, 0, 0.12);
+    --user-message-bg: #D9F7BE; /* Softer green for user messages */
+    --user-message-text: #376E0A;
+    --assistant-message-bg: #FEEFB3; /* Softer yellow for assistant messages */
+    --assistant-message-text: #8A6D3B;
+    --button-hover: #3A7BBF;
+    --link-color: #4A90E2;
+    --link-hover: #3A7BBF;
+}
+
+body {
+    font-family: 'Inter', sans-serif; /* Using a more modern font */
+    margin: 0;
+    padding: 25px; /* Slightly more padding */
+    background-color: var(--background-light);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    background-color: var(--card-background);
+    border-radius: 12px; /* More rounded corners */
+    box-shadow: 0 6px 20px var(--shadow-medium); /* More prominent shadow */
+    width: 100%;
+    max-width: 900px; /* Slightly wider container */
+    padding: 30px; /* More internal padding */
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-height: 650px; /* Adjusted min-height */
+    transition: transform 0.3s ease-in-out; /* Smooth transition on hover (if applicable later) */
+}
+
+.container:hover {
+    transform: translateY(-3px); /* Subtle lift on hover */
+}
+
+h1 {
+    text-align: center;
+    color: var(--primary-color); /* Primary color for headings */
+    margin-bottom: 25px;
+    font-size: 2.5em; /* Larger main heading */
+    font-weight: 700; /* Bolder */
+    letter-spacing: -0.5px;
+}
+
+.chat-window {
+    flex-grow: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    padding: 20px; /* More padding */
+    overflow-y: auto;
+    margin-bottom: 20px;
+    background-color: var(--background-medium); /* Slightly darker background for chat */
+    display: flex; /* Enable flex for messages */
+    flex-direction: column; /* Stack messages vertically */
+    gap: 10px; /* Space between messages */
+    box-shadow: inset 0 2px 5px var(--shadow-light); /* Subtle inner shadow */
+}
+
+.message {
+    padding: 10px 18px; /* More padding */
+    border-radius: 20px; /* More rounded, "pill-shaped" */
+    max-width: 75%; /* Slightly wider max-width */
+    word-wrap: break-word;
+    font-size: 0.95em;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Subtle shadow for messages */
+}
+
+.message.user {
+    background-color: var(--user-message-bg);
+    color: var(--user-message-text);
+    align-self: flex-end;
+    margin-left: auto;
+    border-bottom-right-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.message.assistant {
+    background-color: var(--assistant-message-bg);
+    color: var(--assistant-message-text);
+    align-self: flex-start;
+    margin-right: auto;
+    border-bottom-left-radius: 5px; /* Slightly less rounded on one corner */
+}
+
+.input-area {
+    display: flex;
+    gap: 15px; /* More space between input and button */
+    align-items: center; /* Vertically align items */
+}
+
+.input-area input[type="text"] {
+    flex-grow: 1;
+    padding: 12px 15px; /* More padding */
+    border: 1px solid var(--border-color);
+    border-radius: 8px; /* More rounded */
+    font-size: 17px; /* Slightly larger font */
+    outline: none; /* Remove default outline */
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.input-area input[type="text"]:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.2); /* Focus glow */
+}
+
+.input-area button {
+    padding: 12px 20px; /* More padding */
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 8px; /* More rounded */
+    cursor: pointer;
+    font-size: 17px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.input-area button:hover {
+    background-color: var(--button-hover);
+    transform: translateY(-2px); /* Subtle lift on hover */
+}
+
+.input-area button:active {
+    transform: translateY(0); /* Press effect */
+}
+
+/* Recommendations Summary */
+.recommendations-summary {
+    margin-top: 30px; /* More space above */
+    padding: 25px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background-color: var(--background-medium); /* Use background-medium for consistency */
+    box-shadow: 0 4px 15px var(--shadow-light); /* Softer shadow */
+}
+
+.recommendations-summary h2 {
+    text-align: center;
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-size: 2em;
+    font-weight: 600;
+}
+
+.card-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 25px; /* Increased gap between cards */
+    justify-content: center;
+    margin-bottom: 25px;
+}
+
+.card-item {
+    background-color: var(--card-background);
+    border: 1px solid var(--border-color);
+    border-radius: 10px; /* More rounded */
+    box-shadow: 0 4px 12px var(--shadow-light); /* Improved shadow for cards */
+    padding: 20px; /* More padding */
+    width: calc(33.33% - 25px); /* Adjusted for gap */
+    box-sizing: border-box;
+    text-align: center;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card-item:hover {
+    transform: translateY(-5px); /* Lift effect on hover */
+    box-shadow: 0 8px 20px var(--shadow-medium); /* Enhanced shadow on hover */
+}
+
+.card-item img {
+    max-width: 120px; /* Slightly larger images */
+    height: auto;
+    margin-bottom: 15px;
+    border-radius: 8px; /* More rounded image corners */
+    object-fit: cover; /* Ensure image covers space without distortion */
+    border: 1px solid var(--border-color); /* Subtle border for images */
+}
+
+.card-item h3 {
+    margin-top: 0;
+    color: var(--primary-color);
+    font-size: 1.3em; /* Slightly larger */
+    margin-bottom: 8px;
+}
+
+.card-item p {
+    font-size: 0.9em;
+    color: var(--light-text-color);
+    margin-bottom: 8px; /* Consistent spacing */
+}
+
+.card-item .reasons {
+    font-style: italic;
+    color: var(--light-text-color);
+    margin-bottom: 12px;
+    font-size: 0.85em; /* Slightly smaller for emphasis on style */
+}
+
+.card-item .reward-sim {
+    font-weight: bold;
+    color: var(--secondary-color); /* Use secondary color for emphasis */
+    font-size: 1.1em; /* Larger and more prominent */
+    margin-bottom: 18px;
+}
+
+.card-item a {
+    display: inline-block;
+    padding: 10px 18px;
+    background-color: var(--secondary-color); /* Use secondary color for action button */
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    font-weight: 600;
+}
+
+.card-item a:hover {
+    background-color: #44C7B0; /* Slightly darker shade of secondary color */
+    transform: translateY(-2px);
+}
+
+.recommendations-summary button {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background-color: #6c757d; /* Keep grey for "show more" or similar */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 17px;
+    margin-top: 25px;
+    font-weight: 600;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    box-shadow: 0 2px 5px var(--shadow-light);
+}
+
+.recommendations-summary button:hover {
+    background-color: #5a6268;
+    transform: translateY(-2px);
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    body {
+        padding: 15px;
+    }
+
+    .container {
+        padding: 20px;
+        min-height: auto;
+    }
+
+    h1 {
+        font-size: 2em;
+    }
+
+    .chat-window {
+        min-height: 300px;
+        padding: 15px;
+    }
+
+    .card-list {
+        gap: 15px;
+    }
+
+    .card-item {
+        width: calc(50% - 15px); /* 2 cards per row on smaller screens */
+        padding: 15px;
+    }
+
+    .recommendations-summary h2 {
+        font-size: 1.8em;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 10px;
+    }
+
+    .container {
+        padding: 15px;
+    }
+
+    h1 {
+        font-size: 1.8em;
+    }
+
+    .input-area {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .input-area button {
+        width: 100%;
+    }
+
+    .message {
+        max-width: 90%;
+        padding: 8px 15px;
+    }
+
+    .card-item {
+        width: 100%; /* 1 card per row on very small screens */
+        padding: 15px;
+    }
+}
+```
+
+`static\js\main.js`:
+
+```js
+// static/js/main.js
+const chatWindow = document.getElementById('chat-window');
+const userInput = document.getElementById('user-input');
+const recommendationsSummary = document.getElementById('recommendations-summary');
+const cardList = document.getElementById('card-list');
+
+let sessionId = localStorage.getItem('creditCardAdvisorSessionId');
+if (!sessionId) {
+    sessionId = 'user_' + Date.now();
+    localStorage.setItem('creditCardAdvisorSessionId', sessionId);
+}
+
+function appendMessage(sender, message) {
+    const messageDiv = document.createElement('div');
+    messageDiv.classList.add('message', sender);
+    messageDiv.textContent = message;
+    chatWindow.appendChild(messageDiv);
+    chatWindow.scrollTop = chatWindow.scrollHeight; // Auto-scroll to bottom
+}
+
+async function sendMessage() {
+    const message = userInput.value.trim();
+    if (message === '') return;
+
+    appendMessage('user', message);
+    userInput.value = '';
+
+    try {
+        const response = await fetch('/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message: message, session_id: sessionId }),
+        });
+        const data = await response.json();
+        appendMessage('assistant', data.response);
+
+        if (data.recommendations && data.recommendations.length > 0) {
+            displayRecommendations(data.recommendations);
+        } else {
+            recommendationsSummary.style.display = 'none'; // Hide if no recommendations
+        }
+
+    } catch (error) {
+        console.error('Error sending message:', error);
+        appendMessage('assistant', 'Sorry, I am having trouble connecting. Please try again.');
+    }
+}
+
+function handleKeyPress(event) {
+    if (event.key === 'Enter') {
+        sendMessage();
+    }
+}
+
+function displayRecommendations(cards) {
+    chatWindow.style.display = 'none'; // Hide chat 
+    document.querySelector('.input-area').style.display = 'none'; // Hide input area 
+    recommendationsSummary.style.display = 'block'; // Show summary 
+    cardList.innerHTML = ''; // Clear previous recommendations
+
+    cards.forEach(card => {
+        const cardItem = document.createElement('div');
+        cardItem.classList.add('card-item');
+        cardItem.innerHTML = `
+            <img src="${card.image_url}" alt="${card.card_name}">
+            <h3>${card.card_name}</h3>
+            <p class="reasons">${card.key_reasons}</p>
+            <p class="reward-sim">${card.reward_simulation}</p>
+            <a href="${card.affiliate_link}" target="_blank">Apply Now</a>
+        `;
+        cardList.appendChild(cardItem);
+    });
+}
+
+function restartFlow() {
+    localStorage.removeItem('creditCardAdvisorSessionId'); // Clear session
+    window.location.reload(); // Reload the page to restart the conversation 
+}
+```
+
+`templates\index.html`:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Credit Card Advisor</title>
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="font-inter bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl flex flex-col h-[85vh] overflow-hidden">
+        <h1 class="text-3xl font-bold text-blue-600 text-center py-6 border-b border-gray-200">Credit Card Advisor</h1>
+        
+        <div class="flex-grow p-5 overflow-y-auto flex flex-col space-y-4 bg-gray-50 border-b border-gray-200">
+            <!-- Chat messages will be appended here -->
+            <div class="max-w-[80%] p-3 rounded-xl bg-yellow-100 text-yellow-800 self-start mr-auto rounded-bl-sm">
+                Hello! I'm your credit card advisor. What's your monthly income in INR?
+            </div>
+        </div>
+
+        <div id="recommendations-summary" class="hidden p-5 bg-blue-50 border-t border-gray-200 overflow-y-auto">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4 text-center">Recommended Credit Cards</h2>
+            <div id="card-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 justify-items-center">
+                <!-- Recommended cards will be dynamically inserted here -->
+            </div>
+        </div>
+
+        <div class="flex p-5 space-x-3 border-t border-gray-200">
+            <input type="text" id="user-input" placeholder="Type your message..." class="flex-grow p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="send-button" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-full shadow-md hover:bg-blue-700 transition-colors duration-200 ease-in-out">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatHistoryDiv = document.querySelector('.flex-grow.p-5'); // Select the div where messages are added
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        const recommendationsSummary = document.getElementById('recommendations-summary');
+        const cardList = document.getElementById('card-list');
+
+        const sessionId = 'user_' + Math.random().toString(36).substr(2, 9); 
+
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        function addMessage(sender, message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('max-w-[80%]', 'p-3', 'rounded-xl', 'mb-2'); // Base styling
+
+            if (sender === 'user') {
+                messageDiv.classList.add('bg-blue-100', 'text-blue-800', 'self-end', 'ml-auto', 'rounded-br-sm'); // User message styles
+            } else {
+                messageDiv.classList.add('bg-yellow-100', 'text-yellow-800', 'self-start', 'mr-auto', 'rounded-bl-sm'); // Bot message styles
+            }
+            
+            messageDiv.textContent = message;
+            chatHistoryDiv.appendChild(messageDiv);
+            chatHistoryDiv.scrollTop = chatHistoryDiv.scrollHeight; // Auto-scroll to latest
+        }
+
+        function displayRecommendations(cards) {
+            cardList.innerHTML = ''; // Clear previous recommendations
+            if (cards && cards.length > 0) {
+                recommendationsSummary.classList.remove('hidden'); // Show summary container
+                cards.forEach(card => {
+                    const cardItem = document.createElement('div');
+                    cardItem.classList.add('bg-white', 'rounded-lg', 'shadow-md', 'p-4', 'flex', 'flex-col', 'space-y-3', 'border', 'border-gray-200', 'transition-transform', 'duration-200', 'ease-in-out', 'hover:scale-105');
+                    
+                    cardItem.innerHTML = `
+                        <img src="${card.image_url}" 
+                             alt="${card.card_name}" 
+                             class="max-w-[150px] h-auto mx-auto rounded-md border border-gray-200 p-2 object-contain">
+                        <h3 class="text-lg font-semibold text-gray-800 text-center">${card.card_name}</h3>
+                        <p class="text-sm text-gray-600 text-center"><strong>Key Reasons:</strong> ${card.key_reasons}</p>
+                        <p class="text-base font-bold text-green-600 text-center">${card.reward_simulation}</p>
+                        <a href="${card.affiliate_link || '#'}" target="_blank" class="mt-auto block text-center bg-green-500 text-white py-2 px-4 rounded-full hover:bg-green-600 transition-colors duration-200">Learn More & Apply</a>
+                    `;
+                    cardList.appendChild(cardItem);
+                });
+                recommendationsSummary.scrollTop = 0; // Scroll recommendations to top
+            } else {
+                recommendationsSummary.classList.add('hidden'); // Hide if no recommendations
+            }
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (message === '') return;
+
+            addMessage('user', message);
+            userInput.value = ''; // Clear input immediately
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message, session_id: sessionId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage('bot', data.response); // Display conversational part of the response
+
+                // Check and display recommendations if available
+                if (data.recommendations && Array.isArray(data.recommendations) && data.recommendations.length > 0) {
+                    displayRecommendations(data.recommendations);
+                } else {
+                    displayRecommendations([]); // Clear old recommendations if none in this response
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                addMessage('bot', 'Oops! Something went wrong. Please try again.');
+                displayRecommendations([]); // Clear any old recommendations on error
+            }
+        }
+    </script>
+</body>
+</html>
+
+```
 
 
 ================================================

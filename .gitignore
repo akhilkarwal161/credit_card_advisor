@@ -1,19 +1,22 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python/
-env/
-venv/
 
+*.db
+env/
+*.pyo
+build/
+*.pyc
+*.sqlite3
+.qodo/
+.venv/
+.DS_Store
 # VS Code
 .vscode/
-.qodo/
-
-# Database files (if using SQLite directly in project)
-*.db
-*.sqlite3
-
-# Environment variables
+dist/
 .env
+# Database files (if using SQLite directly in project)
+# Python
+node_modules/
+# Environment variables
+.Python/
+*.pyd
+venv/
+__pycache__/
